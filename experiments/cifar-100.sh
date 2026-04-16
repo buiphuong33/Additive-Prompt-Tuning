@@ -1,12 +1,12 @@
 #!/bin/bash
 
 # experiment settings
-DATASET=CIFAR100
-CONFIG=configs/config.yaml
+DATASET=cifar-100
+N_CLASS=100
 
 # hard coded inputs
-GPUID='0'
-
+GPUID='6'
+CONFIG=configs/cifar-100_prompt.yaml
 REPEAT=1
 OVERWRITE=0
 
@@ -16,9 +16,11 @@ SCHEDULE=30
 EMA_COEFF=0.7
 SEED_LIST=(1 2 3)
 
+# Set delay between experiments (in seconds)
+DELAY_BETWEEN_EXPERIMENTS=10  # Adjust this value as needed
 
 # Create log directory
-LOG_DIR="logs/${DATASET}"
+LOG_DIR="logs"
 mkdir -p $LOG_DIR
 
 for seed in "${SEED_LIST[@]}"
@@ -32,35 +34,43 @@ for seed in "${SEED_LIST[@]}"
 
         echo "Starting experiment with seed=$seed"
         
-        python -u run.py \
+        nohup python -u run.py \
             --config $CONFIG \
-            --dataset $DATASET \
             --gpuid $GPUID \
             --repeat $REPEAT \
             --overwrite $OVERWRITE \
             --learner_type prompt \
             --learner_name APT_Learner \
-            --prompt_param "100" "0.01" \
+            --prompt_param 0.01 \
             --lr $LR \
             --seed $seed \
             --ema_coeff $EMA_COEFF \
             --schedule $SCHEDULE \
-            --log_dir ${OUTDIR} 2>&1 | tee "$LOG_FILE"
+            --log_dir ${OUTDIR} > "$LOG_FILE" 2>&1 &
 
+        # Store the PID of the background process
+        PID=$!
         
+        # Wait for process to complete
+        wait $PID
         
         # Check if process completed successfully
         if [ $? -eq 0 ]; then
-            echo "Experiment with seed $seed completed successfully"
+            echo "Experiment completed successfully"
         else
-            echo "Experiment with seed $seed failed. Check $LOG_FILE for details."
+            echo "Experiment failed"
         fi
 
+        rm -rf ${OUTDIR}/models
         
         echo "----------------------------------------"
-        sleep 5  # Short delay to ensure logs are flushed before next experiment starts
         
-        
+        # Add delay before next experiment
+        if [ $current -lt $total_experiments ]; then
+            echo "Waiting for $DELAY_BETWEEN_EXPERIMENTS seconds before next experiment..."
+            sleep $DELAY_BETWEEN_EXPERIMENTS
+        fi
     done
 
 echo "All experiments completed!"
+exit 0
