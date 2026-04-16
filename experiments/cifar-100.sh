@@ -4,8 +4,8 @@
 DATASET=cifar-100
 N_CLASS=100
 
-# hard coded inputs
-GPUID='6'
+# Chỉnh GPUID về 0 (Kaggle dùng GPU 0)
+GPUID='0'
 CONFIG=configs/cifar-100_prompt.yaml
 REPEAT=1
 OVERWRITE=0
@@ -16,61 +16,47 @@ SCHEDULE=30
 EMA_COEFF=0.7
 SEED_LIST=(1 2 3)
 
-# Set delay between experiments (in seconds)
-DELAY_BETWEEN_EXPERIMENTS=10  # Adjust this value as needed
+DELAY_BETWEEN_EXPERIMENTS=10
 
-# Create log directory
-LOG_DIR="logs"
-mkdir -p $LOG_DIR
+# SỬA LỖI TẠO THƯ MỤC: Tạo cả thư mục con theo DATASET
+LOG_DIR="logs/${DATASET}"
+mkdir -p "$LOG_DIR"
 
 for seed in "${SEED_LIST[@]}"
-    do
-        # save directory
-        OUTDIR="./checkpoints/${DATASET}/seed${seed}"
-        mkdir -p $OUTDIR
+do
+    OUTDIR="./checkpoints/${DATASET}/seed${seed}"
+    mkdir -p "$OUTDIR"
 
-        # Create unique log file name
-        LOG_FILE="${LOG_DIR}/${DATASET}/seed${seed}.log"
+    LOG_FILE="${LOG_DIR}/seed${seed}.log"
 
-        echo "Starting experiment with seed=$seed"
-        
-        nohup python -u run.py \
-            --config $CONFIG \
-            --gpuid $GPUID \
-            --repeat $REPEAT \
-            --overwrite $OVERWRITE \
-            --learner_type prompt \
-            --learner_name APT_Learner \
-            --prompt_param 0.01 \
-            --lr $LR \
-            --seed $seed \
-            --ema_coeff $EMA_COEFF \
-            --schedule $SCHEDULE \
-            --log_dir ${OUTDIR} > "$LOG_FILE" 2>&1 &
+    echo "Starting experiment with seed=$seed"
+    
+    # Bỏ nohup và & để chạy tuần tự trên Kaggle cho dễ theo dõi log
+    python -u run.py \
+        --config $CONFIG \
+        --gpuid $GPUID \
+        --repeat $REPEAT \
+        --overwrite $OVERWRITE \
+        --learner_type prompt \
+        --learner_name APT_Learner \
+        --prompt_param 0.01 \
+        --lr $LR \
+        --seed $seed \
+        --ema_coeff $EMA_COEFF \
+        --schedule $SCHEDULE \
+        --log_dir ${OUTDIR} 2>&1 | tee "$LOG_FILE"
 
-        # Store the PID of the background process
-        PID=$!
-        
-        # Wait for process to complete
-        wait $PID
-        
-        # Check if process completed successfully
-        if [ $? -eq 0 ]; then
-            echo "Experiment completed successfully"
-        else
-            echo "Experiment failed"
-        fi
+    if [ $? -eq 0 ]; then
+        echo "Experiment completed successfully"
+    else
+        echo "Experiment failed"
+    fi
 
-        rm -rf ${OUTDIR}/models
-        
-        echo "----------------------------------------"
-        
-        # Add delay before next experiment
-        if [ $current -lt $total_experiments ]; then
-            echo "Waiting for $DELAY_BETWEEN_EXPERIMENTS seconds before next experiment..."
-            sleep $DELAY_BETWEEN_EXPERIMENTS
-        fi
-    done
+    rm -rf ${OUTDIR}/models
+    echo "----------------------------------------"
+    echo "Waiting for $DELAY_BETWEEN_EXPERIMENTS seconds..."
+    sleep $DELAY_BETWEEN_EXPERIMENTS
+done
 
 echo "All experiments completed!"
 exit 0
