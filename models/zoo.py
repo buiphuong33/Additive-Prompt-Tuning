@@ -80,25 +80,27 @@ class APT(nn.Module):
         if train:
             # Use prompt of current task
             task_id = getattr(self, 'task_id', 0)
-            prompt_groups = self.prompts[task_id]
+            prompt_param = self.prompts[task_id]  # shape (24, 64)
         else:
             # Select prompt based on query
             if query is not None:
                 selected_task = self.select_prompt(query)
-                prompt_groups = self.prompts[selected_task]
+                prompt_param = self.prompts[selected_task]
             else:
                 # Fallback to first prompt
-                prompt_groups = self.prompts[0]
+                prompt_param = self.prompts[0]
         
-        P_root_k = prompt_groups[l*2:l*2+1].reshape(1,1,64).expand(B,12,1,64)
-        P_root_v = prompt_groups[l*2+1:l*2+2].reshape(1,1,64).expand(B,12,1,64)
+        # Extract key and value prompts for layer l
+        # prompt_param shape: (24, 64) → 12 layers * 2 (k, v) * 64 (head_dim)
+        P_root_k = prompt_param[l*2].unsqueeze(0).unsqueeze(0).expand(B, 12, 1, 64)  # (1, 64) → (B, 12, 1, 64)
+        P_root_v = prompt_param[l*2+1].unsqueeze(0).unsqueeze(0).expand(B, 12, 1, 64)  # (1, 64) → (B, 12, 1, 64)
 
-        P_k = torch.cat((P_root_k, torch.zeros((B,12,196,64),device =x_block.device)),dim=-2)
-        P_v = torch.cat((P_root_v, torch.zeros((B,12,196,64),device =x_block.device)),dim=-2)
+        P_k = torch.cat((P_root_k, torch.zeros((B,12,196,64), device=x_block.device)), dim=-2)
+        P_v = torch.cat((P_root_v, torch.zeros((B,12,196,64), device=x_block.device)), dim=-2)
         
         P = [P_k, P_v]    
 
-        return P #, rpt_index
+        return P
 
 # note - ortho init has not been found to help l2p/dual prompt
 def create_prompt_with_init(a, b, c=None, ortho=False, mean=None, std=None, init_ref=None):
