@@ -147,6 +147,22 @@ class NormalNN(nn.Module):
             
         self.model.eval()
 
+        # Collect CLS embeddings for statistics
+        if hasattr(self.model, 'prompt') and hasattr(self.model.prompt, 'update_statistics'):
+            queries = []
+            with torch.no_grad():
+                for i, (x, y, task) in enumerate(train_loader):
+                    if self.gpu:
+                        x = x.cuda()
+                    # Get CLS embedding (before classifier)
+                    cls_embed = self.model.feat(x)[:, 0, :]  # CLS token from ViT
+                    queries.append(cls_embed.cpu())
+                    if i >= 10:  # Limit to first 10 batches for efficiency
+                        break
+            if queries:
+                all_queries = torch.cat(queries, dim=0)
+                self.model.prompt.update_statistics(all_queries)
+
         self.last_valid_out_dim = self.valid_out_dim
         self.first_task = False
         

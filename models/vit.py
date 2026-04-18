@@ -1,3 +1,4 @@
+#vit.py
 '''
  * Based on vit from blip code base
  * https://github.com/salesforce/BLIP
@@ -107,7 +108,6 @@ class Block(nn.Module):
         self.norm2 = norm_layer(dim)
         mlp_hidden_dim = int(dim * mlp_ratio)
         self.mlp = Mlp(in_features=dim, hidden_features=mlp_hidden_dim, act_layer=act_layer, drop=drop)
-
     def forward(self, x, register_hook=False, prompt=None,layer=-1):
         if prompt is not None:
             if type(prompt) is list: # attention;[k,v]
@@ -205,16 +205,17 @@ class VisionTransformer(nn.Module):
             for i, blk in enumerate(self.blocks):
                 x, attn = blk(x, register_blk==i)
         else:
+            query = x[:, 0, :] if not train else None  # CLS embedding for selection
             for i, blk in enumerate(self.blocks):
                 if i in prepend_layers:
-                    prompt_list = prompt.forward(i, x, train=train)
+                    prompt_list = prompt.forward(i, x, train=train, query=query)
                     x = torch.cat((
                         x[:, :1, :], # cls
                         prompt_list,
                         x[:, 1:, :]
                     ), dim=1)
                 elif i in add_layers:                            
-                    prompt_list = prompt.forward(i, x, train=train)
+                    prompt_list = prompt.forward(i, x, train=train, query=query)
                     
                 x, attn = blk(x, register_blk==i, prompt=prompt_list, layer=i)    
 

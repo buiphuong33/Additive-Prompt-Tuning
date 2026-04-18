@@ -1,3 +1,4 @@
+#zoo.py
 import itertools
 import torch
 import torch.nn as nn
@@ -25,15 +26,16 @@ class APT(nn.Module):
         self.n_tasks = n_tasks
         self._init_smart(prompt_param)
 
-        self.merge_flag = True
-
         self.ema_coeff = ema_coeff
 
-        self.prompt_tokens = create_prompt_with_init(12*2, emb_d) 
-        global_merged_prompt = torch.zeros(12*2, emb_d).cuda()
-        self.register_buffer('global_merged_prompt', global_merged_prompt.clone().detach()) 
+        # Task-specific prompts: list of prompts for each task
+        self.prompts = nn.ModuleList([create_prompt_with_init(12*2, emb_d) for _ in range(n_tasks)])
+        for prompt in self.prompts:
+            trunc_normal_(prompt, std=0.02)
 
-        trunc_normal_(self.prompt_tokens, std=0.02)
+        # Storage for query statistics per task
+        self.query_means = []  # list of tensors (emb_d,) for each task
+        self.query_covs = []   # optional, list of tensors (emb_d, emb_d) for covariance
 
         for i in range(12):
             setattr(self, f'k_layer_proj{i}', nn.Linear(2, 2))
@@ -51,19 +53,45 @@ class APT(nn.Module):
     def process_task_count(self):
         self.task_count += 1
 
-    def forward(self, l, x_block, train=False):
+    def update_statistics(self, queries):
+        # queries: tensor (N, emb_d) from CLS tokens of current task
+        mean = queries.mean(dim=0)  # (emb_d,)
+        self.query_means.append(mean.detach().cpu())
+        # Optional: covariance
+        cov = torch.cov(queries.T)  # (emb_d, emb_d)
+        self.query_covs.append(cov.detach().cpu())
+
+    def select_prompt(self, query):
+        # query: tensor (emb_d,) from CLS of current sample
+        if len(self.query_means) == 0:
+            return 0  # default to first task
+        distances = []
+        for mean in self.query_means:
+            # Use cosine similarity as distance (1 - sim, since high sim = close)
+            sim = F.cosine_similarity(query.unsqueeze(0), mean.cuda().unsqueeze(0)).item()
+            dist = 1 - sim
+            distances.append(dist)
+        selected_task = torch.argmin(torch.tensor(distances)).item()
+        return selected_task
+
+    def forward(self, l, x_block, train=False, query=None):
         B, _, _ = x_block.shape
 
-        prompt_groups = self.prompt_tokens
-        
-        if train or not self.merge_flag:
-            P_root_k = prompt_groups[l*2:l*2+1].reshape(12,1,64).expand(B,12,1,64)
-            P_root_v = prompt_groups[l*2+1:l*2+2].reshape(12,1,64).expand(B,12,1,64)
-        elif not train and self.merge_flag:
-            P_root_k = self.global_merged_prompt[l*2:l*2+1].reshape(12,1,64).expand(B,12,1,64)
-            P_root_v = self.global_merged_prompt[l*2+1:l*2+2].reshape(12,1,64).expand(B,12,1,64)
+        if train:
+            # Use prompt of current task
+            task_id = getattr(self, 'task_id', 0)
+            prompt_groups = self.prompts[task_id]
         else:
-            raise ValueError("merge flag and mode err")
+            # Select prompt based on query
+            if query is not None:
+                selected_task = self.select_prompt(query)
+                prompt_groups = self.prompts[selected_task]
+            else:
+                # Fallback to first prompt
+                prompt_groups = self.prompts[0]
+        
+        P_root_k = prompt_groups[l*2:l*2+1].reshape(1,1,64).expand(B,12,1,64)
+        P_root_v = prompt_groups[l*2+1:l*2+2].reshape(1,1,64).expand(B,12,1,64)
 
         P_k = torch.cat((P_root_k, torch.zeros((B,12,196,64),device =x_block.device)),dim=-2)
         P_v = torch.cat((P_root_v, torch.zeros((B,12,196,64),device =x_block.device)),dim=-2)
@@ -125,22 +153,8 @@ class ViTZoo(nn.Module):
         else:
             self.prompt = None
 
-        if self.prompt_flag == "apt":
-            tuned_params = [
-            "clf_norm.weight","clf_norm.bias",
-            "prompt.prompt_tokens",
-            "last.weight",
-            "last.bias", 
-            ] 
-        else:
-            tuned_params = [
-            "clf_norm.weight","clf_norm.bias",
-            "last.weight",
-            "last.bias", 
-            ]
-
         for name, param in self.named_parameters():
-            if name in tuned_params:
+            if name in ["clf_norm.weight", "clf_norm.bias", "last.weight", "last.bias"] or ("prompt" in name and self.prompt_flag == "apt"):
                 param.requires_grad = True
             else:
                 param.requires_grad = False
