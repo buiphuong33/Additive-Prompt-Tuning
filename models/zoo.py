@@ -28,8 +28,8 @@ class APT(nn.Module):
 
         self.ema_coeff = ema_coeff
 
-        # Task-specific prompts: list of prompts for each task
-        self.prompts = nn.ModuleList([create_prompt_with_init(12*2, emb_d) for _ in range(n_tasks)])
+        # Task-specific prompts: list of prompts for each task (use ParameterList instead of ModuleList)
+        self.prompts = nn.ParameterList([create_prompt_with_init(12*2, emb_d) for _ in range(n_tasks)])
         for prompt in self.prompts:
             trunc_normal_(prompt, std=0.02)
 
