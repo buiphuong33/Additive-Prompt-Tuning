@@ -24,12 +24,14 @@ class APT(nn.Module):
         self.task_count = 0
         self.emb_d = emb_d
         self.n_tasks = n_tasks
+        self.head_dim = 64  # ViT-Base: 768 / 12 heads = 64
         self._init_smart(prompt_param)
 
         self.ema_coeff = ema_coeff
 
-        # Task-specific prompts: list of prompts for each task (use ParameterList instead of ModuleList)
-        self.prompts = nn.ParameterList([create_prompt_with_init(12*2, emb_d) for _ in range(n_tasks)])
+        # Task-specific prompts: list of prompts for each task
+        # Shape: (24, 64) → 12 layers * 2 (k, v) * 64 (head_dim per token)
+        self.prompts = nn.ParameterList([create_prompt_with_init(12*2, self.head_dim) for _ in range(n_tasks)])
         for prompt in self.prompts:
             trunc_normal_(prompt, std=0.02)
 
