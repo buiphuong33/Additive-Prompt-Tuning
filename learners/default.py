@@ -133,18 +133,7 @@ class NormalNN(nn.Module):
                                          
         self.model.train()
 
-        merge_flag = self.model.prompt.merge_flag
-
-        if merge_flag:
-            if self.last_valid_out_dim == 0:
-                self.model.prompt.global_merged_prompt = self.model.prompt.prompt_tokens.clone().detach()
-            else:
-                now_task_p = self.model.prompt.prompt_tokens.clone().detach()
-                global_p = self.model.prompt.global_merged_prompt
-                merged_p = self.model.prompt.merge_prompt(global_p, now_task_p)
-                
-                self.model.prompt.global_merged_prompt.data = merged_p
-            
+        # No global prompt merging in the current task-specific prompt design.
         self.model.eval()
 
         # Collect CLS embeddings for statistics
