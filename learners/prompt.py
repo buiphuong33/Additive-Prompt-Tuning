@@ -58,7 +58,11 @@ class Prompt_Learner(NormalNN):
         
         # create schedules
         if self.schedule_type == 'cosine':
-            self.scheduler = CosineSchedule(self.optimizer, K=self.schedule[-1])
+            if isinstance(self.schedule, (list, tuple)):
+                K = self.schedule[-1] if len(self.schedule) > 0 else 1
+            else:
+                K = self.schedule
+            self.scheduler = CosineSchedule(self.optimizer, K=K)
         elif self.schedule_type == 'decay':
             self.scheduler = torch.optim.lr_scheduler.MultiStepLR(self.optimizer, milestones=self.schedule, gamma=0.1)
 
