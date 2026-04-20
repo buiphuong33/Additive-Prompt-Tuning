@@ -205,7 +205,7 @@ class VisionTransformer(nn.Module):
             for i, blk in enumerate(self.blocks):
                 x, attn = blk(x, register_blk==i)
         else:
-            query = x[:, 0, :] if not train else None  # CLS embedding for selection
+            query = x[:, 0, :].mean(dim=0) if not train else None  # CLS embedding for selection
             for i, blk in enumerate(self.blocks):
                 if i in prepend_layers:
                     prompt_list = prompt.forward(i, x, train=train, query=query)

@@ -64,13 +64,16 @@ class APT(nn.Module):
         self.query_covs.append(cov.detach().cpu())
 
     def select_prompt(self, query):
-        # query: tensor (emb_d,) from CLS of current sample
+        # query: tensor (emb_d,) or (B, emb_d) from CLS tokens
+        if query.dim() == 2:
+            query = query.mean(dim=0)
+
         if len(self.query_means) == 0:
             return 0  # default to first task
         distances = []
         for mean in self.query_means:
-            # Use cosine similarity as distance (1 - sim, since high sim = close)
-            sim = F.cosine_similarity(query.unsqueeze(0), mean.cuda().unsqueeze(0)).item()
+            mean = mean.to(query.device)
+            sim = F.cosine_similarity(query.unsqueeze(0), mean.unsqueeze(0)).item()
             dist = 1 - sim
             distances.append(dist)
         selected_task = torch.argmin(torch.tensor(distances)).item()
