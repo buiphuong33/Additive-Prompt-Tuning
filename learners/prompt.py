@@ -1,6 +1,8 @@
 #prompt.py
 from __future__ import print_function
 import torch
+import torch.nn as nn
+import torch.nn.functional as F
 import models
 from utils.metric import accuracy, AverageMeter, Timer
 from .default import NormalNN, weight_reset, accumulate_acc
@@ -10,7 +12,76 @@ class Prompt_Learner(NormalNN):
     def __init__(self, learner_config):
         self.prompt_param = learner_config['prompt_param']
         self.ema_coeff = learner_config['ema_coeff']
+        # Hyperparameters for additional losses
+        self.orthogonal_weight = learner_config.get('orthogonal_weight', 0.01)
+        self.contrastive_weight = learner_config.get('contrastive_weight', 0.1)
+        self.temperature = learner_config.get('temperature', 0.1)
         super(Prompt_Learner, self).__init__(learner_config)
+
+    def orthogonal_loss(self):
+        """Encourage prompts from different tasks to be orthogonal."""
+        if not hasattr(self.model, 'prompt') or not hasattr(self.model.prompt, 'prompts'):
+            return torch.tensor(0.0, device=self.config['gpuid'][0] if self.gpu else 'cpu')
+        
+        prompts = self.model.prompt.prompts  # ParameterList
+        if len(prompts) <= 1:
+            return torch.tensor(0.0, device=self.config['gpuid'][0] if self.gpu else 'cpu')
+        
+        # Compute Gram matrix of prompt similarities
+        num_tasks = len(prompts)
+        prompt_vectors = []
+        for p in prompts:
+            prompt_vectors.append(p.data.flatten())
+        
+        # Stack and compute correlation
+        stacked = torch.stack(prompt_vectors, dim=0)  # (num_tasks, dim)
+        gram = torch.mm(stacked, stacked.t())  # (num_tasks, num_tasks)
+        
+        # Target: diagonal should be 1 (self-similarity), off-diagonal should be 0
+        target = torch.eye(num_tasks, device=gram.device)
+        loss = F.mse_loss(gram, target)
+        
+        return loss * self.orthogonal_weight
+
+    def contrastive_loss(self, inputs, targets):
+        """Contrastive loss on CLS embeddings to improve task discrimination."""
+        if not hasattr(self.model, 'prompt'):
+            return torch.tensor(0.0, device=self.config['gpuid'][0] if self.gpu else 'cpu')
+        
+        # Get CLS embeddings
+        with torch.no_grad():
+            self.model.eval()
+            features = self.model.feat(inputs)[:, 0, :]  # CLS token
+            self.model.train()
+        
+        # Normalize features
+        features = F.normalize(features, dim=1)
+        
+        # Compute similarity matrix
+        sim_matrix = torch.mm(features, features.t()) / self.temperature
+        
+        # Create positive mask (same target) and negative mask (different target)
+        labels = targets.unsqueeze(0)
+        pos_mask = (labels == labels.t()).float()
+        neg_mask = 1 - pos_mask
+        
+        # Mask out diagonal (self-contrast)
+        diag_mask = torch.eye(pos_mask.size(0), device=pos_mask.device)
+        pos_mask = pos_mask - diag_mask
+        
+        # InfoNCE loss
+        exp_sim = torch.exp(sim_matrix)
+        pos_sum = (exp_sim * pos_mask).sum(dim=1)
+        neg_sum = (exp_sim * neg_mask).sum(dim=1)
+        
+        # Avoid division by zero
+        denominator = pos_sum + neg_sum
+        denominator = torch.where(denominator > 0, denominator, torch.ones_like(denominator))
+        
+        loss = -torch.log(pos_sum / denominator + 1e-8)
+        loss = loss.mean() * self.contrastive_weight
+        
+        return loss
 
     def update_model(self, inputs, targets):
         # logits
@@ -18,7 +89,14 @@ class Prompt_Learner(NormalNN):
         
         logits = logits[:,:self.valid_out_dim]
         logits[:,:self.last_valid_out_dim] = -float('inf')
-        total_loss = self.criterion(logits, targets.long())       
+        ce_loss = self.criterion(logits, targets.long())
+        
+        # Additional losses
+        ortho_loss = self.orthogonal_loss()
+        cont_loss = self.contrastive_loss(inputs, targets)
+        
+        # Total loss
+        total_loss = ce_loss + ortho_loss + cont_loss
         
         # step
         self.optimizer.zero_grad()

@@ -1,3 +1,4 @@
+#trainer.py
 import os
 import sys
 import argparse
@@ -159,7 +160,11 @@ class Trainer:
                         'tasks': self.tasks_logits,
                         'top_k': self.top_k,
                         'prompt_param':[self.num_tasks,args.prompt_param],
-                        'ema_coeff': args.ema_coeff
+                        'ema_coeff': args.ema_coeff,
+                        'orthogonal_weight': args.orthogonal_weight,
+                        'contrastive_weight': args.contrastive_weight,
+                        'temperature': args.temperature,
+                        'prompt_top_k': args.prompt_top_k
                         }
         self.learner_type, self.learner_name = args.learner_type, args.learner_name
         self.learner = learners.__dict__[self.learner_type].__dict__[self.learner_name](self.learner_config)

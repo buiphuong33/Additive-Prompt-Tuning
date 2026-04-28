@@ -44,9 +44,9 @@ class APT(nn.Module):
             setattr(self, f'v_layer_proj{i}', nn.Linear(2, 2))
          
    
-    def merge_prompt(self, prompt1, prompt2):
-        print("Merging prompt ... ")
-        return prompt1*self.ema_coeff + prompt2*(1-self.ema_coeff)
+    # def merge_prompt(self, prompt1, prompt2):
+    #     print("Merging prompt ... ")
+    #     return prompt1*self.ema_coeff + prompt2*(1-self.ema_coeff)
 
     def _init_smart(self, prompt_param):
         self.prompt_dropout_ratio = float(prompt_param[0])
@@ -63,23 +63,32 @@ class APT(nn.Module):
         cov = torch.cov(queries.T)  # (emb_d, emb_d)
         self.query_covs.append(cov.detach().cpu())
 
-    def select_prompt(self, query):
+    def select_prompt(self, query, top_k=3):
         # query: tensor (emb_d,) or (B, emb_d) from CLS tokens
         if query.dim() == 2:
             query = query.mean(dim=0)
 
         if len(self.query_means) == 0:
-            return 0  # default to first task
-        distances = []
+            return [0], [1.0]  # default to first task with weight 1.0
+        
+        similarities = []
         for mean in self.query_means:
             mean = mean.to(query.device)
             sim = F.cosine_similarity(query.unsqueeze(0), mean.unsqueeze(0)).item()
-            dist = 1 - sim
-            distances.append(dist)
-        selected_task = torch.argmin(torch.tensor(distances)).item()
-        return selected_task
+            similarities.append(sim)
+        
+        # Get top-k indices (highest similarity first)
+        similarities = torch.tensor(similarities)
+        top_k = min(top_k, len(similarities))
+        top_indices = torch.argsort(similarities, descending=True)[:top_k].tolist()
+        
+        # Compute softmax weights from similarities
+        top_sims = similarities[top_indices]
+        weights = F.softmax(top_sims, dim=0)
+        
+        return top_indices, weights
 
-    def forward(self, l, x_block, train=False, query=None):
+    def forward(self, l, x_block, train=False, query=None, top_k=3):
         B, _, _ = x_block.shape
 
         if train:
@@ -87,10 +96,14 @@ class APT(nn.Module):
             task_id = getattr(self, 'task_id', 0)
             prompt_param = self.prompts[task_id]  # shape (24, 64)
         else:
-            # Select prompt based on query
+            # Select prompts based on query and combine with weights
             if query is not None:
-                selected_task = self.select_prompt(query)
-                prompt_param = self.prompts[selected_task]
+                top_indices, weights = self.select_prompt(query, top_k=top_k)
+                
+                # Weighted combination of prompts
+                prompt_param = torch.zeros(24, 64, device=x_block.device)
+                for idx, w in zip(top_indices, weights):
+                    prompt_param = prompt_param + w * self.prompts[idx].data
             else:
                 # Fallback to first prompt
                 prompt_param = self.prompts[0]

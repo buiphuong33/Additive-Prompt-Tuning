@@ -206,16 +206,17 @@ class VisionTransformer(nn.Module):
                 x, attn = blk(x, register_blk==i)
         else:
             query = x[:, 0, :].mean(dim=0) if not train else None  # CLS embedding for selection
+            top_k = getattr(self, 'prompt_top_k', 3)  # default top_k = 3
             for i, blk in enumerate(self.blocks):
                 if i in prepend_layers:
-                    prompt_list = prompt.forward(i, x, train=train, query=query)
+                    prompt_list = prompt.forward(i, x, train=train, query=query, top_k=top_k)
                     x = torch.cat((
                         x[:, :1, :], # cls
                         prompt_list,
                         x[:, 1:, :]
                     ), dim=1)
                 elif i in add_layers:                            
-                    prompt_list = prompt.forward(i, x, train=train, query=query)
+                    prompt_list = prompt.forward(i, x, train=train, query=query, top_k=top_k)
                     
                 x, attn = blk(x, register_blk==i, prompt=prompt_list, layer=i)    
 

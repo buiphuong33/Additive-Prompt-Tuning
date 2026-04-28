@@ -1,3 +1,4 @@
+#run.py
 from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
@@ -45,6 +46,14 @@ def create_args():
     parser.add_argument('--DW', default=False, action='store_true', help='dataset balancing')
     parser.add_argument('--prompt_param', nargs="+", type=str, default=["1", "1", "1"],
                          help="e prompt pool size, e prompt length, g prompt length")
+    parser.add_argument('--orthogonal_weight', type=float, default=0.01,
+                         help="weight for orthogonal loss between task prompts")
+    parser.add_argument('--contrastive_weight', type=float, default=0.1,
+                         help="weight for contrastive loss on CLS embeddings")
+    parser.add_argument('--temperature', type=float, default=0.1,
+                         help="temperature for contrastive loss")
+    parser.add_argument('--prompt_top_k', type=int, default=3,
+                         help="number of top prompts to combine for inference")
     
     parser.add_argument('--seed', type=int, default=3, help="batch size for training")
 
