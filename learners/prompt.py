@@ -27,7 +27,7 @@ class Prompt_Learner(NormalNN):
         if len(prompts) <= 1:
             return torch.tensor(0.0, device=self.config['gpuid'][0] if self.gpu else 'cpu')
         
-        # Compute Gram matrix of prompt similarities
+        # Compute Gram matrix of prompt similarities (normalized)
         num_tasks = len(prompts)
         prompt_vectors = []
         for p in prompts:
@@ -35,7 +35,9 @@ class Prompt_Learner(NormalNN):
         
         # Stack and compute correlation
         stacked = torch.stack(prompt_vectors, dim=0)  # (num_tasks, dim)
-        gram = torch.mm(stacked, stacked.t())  # (num_tasks, num_tasks)
+        # Normalize before computing Gram
+        stacked_norm = F.normalize(stacked, dim=1)
+        gram = torch.mm(stacked_norm, stacked_norm.t())  # (num_tasks, num_tasks)
         
         # Target: diagonal should be 1 (self-similarity), off-diagonal should be 0
         target = torch.eye(num_tasks, device=gram.device)
@@ -57,8 +59,9 @@ class Prompt_Learner(NormalNN):
         # Normalize features
         features = F.normalize(features, dim=1)
         
-        # Compute similarity matrix
-        sim_matrix = torch.mm(features, features.t()) / self.temperature
+        # Compute similarity matrix with higher temperature for stability
+        temp = max(self.temperature, 0.5)  # Use at least 0.5 for stability
+        sim_matrix = torch.mm(features, features.t()) / temp
         
         # Create positive mask (same target) and negative mask (different target)
         labels = targets.unsqueeze(0)
@@ -69,8 +72,8 @@ class Prompt_Learner(NormalNN):
         diag_mask = torch.eye(pos_mask.size(0), device=pos_mask.device)
         pos_mask = pos_mask - diag_mask
         
-        # InfoNCE loss
-        exp_sim = torch.exp(sim_matrix)
+        # InfoNCE loss with numerical stability
+        exp_sim = torch.exp(sim_matrix - sim_matrix.max(dim=1, keepdim=True)[0])  # subtract max for stability
         pos_sum = (exp_sim * pos_mask).sum(dim=1)
         neg_sum = (exp_sim * neg_mask).sum(dim=1)
         
