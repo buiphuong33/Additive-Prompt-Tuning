@@ -16,7 +16,7 @@ class Prompt_Learner(NormalNN):
         self.orthogonal_weight = learner_config.get('orthogonal_weight', 0.01)
         self.contrastive_weight = learner_config.get('contrastive_weight', 0.1)
         self.temperature = learner_config.get('temperature', 0.1)
-        print(f"[DEBUG Prompt_Learner __init__] orthogonal_weight={self.orthogonal_weight}, contrastive_weight={self.contrastive_weight}, temperature={self.temperature}")
+        #print(f"[DEBUG Prompt_Learner __init__] orthogonal_weight={self.orthogonal_weight}, contrastive_weight={self.contrastive_weight}, temperature={self.temperature}")
         super(Prompt_Learner, self).__init__(learner_config)
 
     def orthogonal_loss(self):
@@ -104,7 +104,7 @@ class Prompt_Learner(NormalNN):
         cont_loss = self.contrastive_loss(inputs, targets)
         
         # Debug: Print detailed loss info
-        print(f"  [DEBUG Loss] CE: {ce_loss.item():.6f}, Ortho: {ortho_loss.item():.6f} (w={self.orthogonal_weight}), Cont: {cont_loss.item():.6f} (w={self.contrastive_weight})")
+        #print(f"  [DEBUG Loss] CE: {ce_loss.item():.6f}, Ortho: {ortho_loss.item():.6f} (w={self.orthogonal_weight}), Cont: {cont_loss.item():.6f} (w={self.contrastive_weight})")
         
         # Total loss
         total_loss = ce_loss + ortho_loss + cont_loss
@@ -119,7 +119,7 @@ class Prompt_Learner(NormalNN):
             for p in self.model.prompt.prompts:
                 if p.grad is not None:
                     prompt_grad_norm += p.grad.norm().item()
-            print(f"  [DEBUG] Prompt grad norm: {prompt_grad_norm:.6f}")
+            #print(f"  [DEBUG] Prompt grad norm: {prompt_grad_norm:.6f}")
         
         self.optimizer.step()
         
