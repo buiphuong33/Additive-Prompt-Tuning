@@ -139,6 +139,11 @@ class Trainer:
         self.add_dim = 0
 
         # Prepare the self.learner (model)
+        # Debug: Check args attributes
+        print(f"[DEBUG Trainer] args.orthogonal_weight = {getattr(args, 'orthogonal_weight', 'NOT_FOUND')}")
+        print(f"[DEBUG Trainer] args.contrastive_weight = {getattr(args, 'contrastive_weight', 'NOT_FOUND')}")
+        print(f"[DEBUG Trainer] args.temperature = {getattr(args, 'temperature', 'NOT_FOUND')}")
+        
         self.learner_config = {'num_classes': num_classes,
                         'lr': args.lr,
                         'debug_mode': args.debug_mode == 1,

@@ -74,6 +74,10 @@ def get_args(argv):
     args = parser.parse_args(argv)
     config = yaml.load(open(args.config, 'r'), Loader=yaml.Loader)
     config.update(vars(args))
+    # Debug: Print new args
+    print(f"[DEBUG get_args] orthogonal_weight: {config.get('orthogonal_weight')}")
+    print(f"[DEBUG get_args] contrastive_weight: {config.get('contrastive_weight')}")
+    print(f"[DEBUG get_args] temperature: {config.get('temperature')}")
     return argparse.Namespace(**config)
 
 # want to save everything printed to outfile
