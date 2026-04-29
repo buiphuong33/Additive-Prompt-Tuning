@@ -16,6 +16,12 @@ SCHEDULE=30
 EMA_COEFF=0.7
 SEED_LIST=(1)
 
+# Additional loss weights
+ORTHOGONAL_WEIGHT=0.01
+CONTRASTIVE_WEIGHT=0.1
+TEMPERATURE=0.5
+PROMPT_TOP_K=3
+
 DELAY_BETWEEN_EXPERIMENTS=10
 
 # SỬA LỖI TẠO THƯ MỤC: Tạo cả thư mục con theo DATASET
@@ -44,6 +50,10 @@ do
         --seed $seed \
         --ema_coeff $EMA_COEFF \
         --schedule $SCHEDULE \
+        --orthogonal_weight $ORTHOGONAL_WEIGHT \
+        --contrastive_weight $CONTRASTIVE_WEIGHT \
+        --temperature $TEMPERATURE \
+        --prompt_top_k $PROMPT_TOP_K \
         --log_dir ${OUTDIR} 2>&1 | tee "$LOG_FILE"
 
     if [ $? -eq 0 ]; then
