@@ -32,7 +32,7 @@ class Prompt_Learner(NormalNN):
         num_tasks = len(prompts)
         prompt_vectors = []
         for p in prompts:
-            prompt_vectors.append(p.data.flatten())
+            prompt_vectors.append(p.flatten())
         
         # Stack and compute correlation
         stacked = torch.stack(prompt_vectors, dim=0)  # (num_tasks, dim)
