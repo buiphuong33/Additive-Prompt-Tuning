@@ -52,17 +52,15 @@ class Prompt_Learner(NormalNN):
             return torch.tensor(0.0, device=self.config['gpuid'][0] if self.gpu else 'cpu')
         
         # Get CLS embeddings
-        with torch.no_grad():
-            self.model.eval()
-            features = self.model.feat(inputs)[:, 0, :]  # CLS token
-            self.model.train()
+        self.model.eval()
+        features = self.model.feat(inputs)[:, 0, :]  # CLS token
+        self.model.train()
         
         # Normalize features
         features = F.normalize(features, dim=1)
         
-        # Compute similarity matrix with higher temperature for stability
-        temp = max(self.temperature, 0.5)  # Use at least 0.5 for stability
-        sim_matrix = torch.mm(features, features.t()) / temp
+        # Compute similarity matrix with temperature
+        sim_matrix = torch.mm(features, features.t()) / self.temperature
         
         # Create positive mask (same target) and negative mask (different target)
         labels = targets.unsqueeze(0)
@@ -74,7 +72,7 @@ class Prompt_Learner(NormalNN):
         pos_mask = pos_mask - diag_mask
         
         # InfoNCE loss with numerical stability
-        exp_sim = torch.exp(sim_matrix - sim_matrix.max(dim=1, keepdim=True)[0])  # subtract max for stability
+        exp_sim = torch.exp(sim_matrix - sim_matrix.max(dim=1, keepdim=True)[0])
         pos_sum = (exp_sim * pos_mask).sum(dim=1)
         neg_sum = (exp_sim * neg_mask).sum(dim=1)
         
@@ -83,9 +81,15 @@ class Prompt_Learner(NormalNN):
         denominator = torch.where(denominator > 0, denominator, torch.ones_like(denominator))
         
         loss = -torch.log(pos_sum / denominator + 1e-8)
-        loss = loss.mean() * self.contrastive_weight
         
-        return loss
+        # Only compute loss where there are positive pairs
+        valid_mask = pos_sum > 0
+        if valid_mask.sum() > 0:
+            loss = loss[valid_mask].mean()
+        else:
+            loss = torch.tensor(0.0, device=features.device)
+        
+        return loss * self.contrastive_weight
 
     def update_model(self, inputs, targets):
         # logits
