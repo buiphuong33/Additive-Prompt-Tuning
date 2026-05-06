@@ -36,10 +36,24 @@ class Prompt_Learner(NormalNN):
         # parse optimizer args
         # Multi-GPU
         if len(self.config['gpuid']) > 1:
-            params_to_opt = list(self.model.module.prompt.parameters()) + list(self.model.module.last.parameters())
+            model_ref = self.model.module
         else:
-            params_to_opt = list(self.model.prompt.parameters()) + list(self.model.last.parameters())
+            model_ref = self.model
         print('*****************************************')
+        params_to_opt = []
+        
+        # Lấy tham số từ module APT (nơi chứa Prompt và Gate)
+        if hasattr(model_ref.feat, 'apt'):
+            params_to_opt += list(model_ref.feat.apt.parameters())
+        else:
+            # Backup trường hợp tên thuộc tính khác (nếu có)
+            print("Cảnh báo: Không tìm thấy module 'apt' trong model_ref.feat")
+        
+        if hasattr(model_ref, 'last'):
+            params_to_opt += list(model_ref.last.parameters())
+
+        print(f'*** Số lượng nhóm tham số được tối ưu: {len(params_to_opt)} ***')    
+        
         optimizer_arg = {'params':params_to_opt,
                          'lr':self.config['lr'],
                          'weight_decay':self.config['weight_decay']}
