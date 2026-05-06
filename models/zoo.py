@@ -144,8 +144,8 @@ class ViTZoo(nn.Module):
             # Chú ý: Truyền tham số đúng từ prompt_param
             self.apt = APT(768, n_tasks=len(tasks), prompt_param=prompt_param, ema_coeff=ema_coeff)
             # Quan trọng: Gán apt vào backbone để vit.py có thể truy cập qua prompt.forward
-            if self.feat is not None:
-                self.feat.apt = self.apt 
+            # if self.feat is not None:
+            #     self.feat.apt = self.apt 
         else:
             self.apt = None
 
@@ -153,6 +153,7 @@ class ViTZoo(nn.Module):
         self.last = nn.Linear(768, num_classes) 
         self.clf_norm = nn.LayerNorm(768)
 
+        self._ensure_apt_attached()
         # 4. Thiết lập đóng băng/mở khóa tham số
         # Mở khóa các tham số của APT (bao gồm gate_net và prompt_tokens) và head
         for name, param in self.named_parameters():
@@ -161,7 +162,12 @@ class ViTZoo(nn.Module):
             else:
                 param.requires_grad = False
 
+    def _ensure_apt_attached(self):
+        """Đảm bảo backbone (feat) luôn mang theo module apt"""
+        if self.apt is not None and self.feat is not None:
+            self.feat.apt = self.apt
     def forward(self, x, train=False):
+        self._ensure_apt_attached()
         # Truyền module apt vào hàm forward của backbone (VisionTransformer)
         if self.apt is not None:
             out = self.feat(x, prompt=self.apt, train=train)
@@ -191,9 +197,7 @@ class MoCoZoo(ViTZoo):
             del load_dict['head.weight']; del load_dict['head.bias']
             zoo_model.load_state_dict(load_dict, strict=False)
             self.feat = zoo_model
-            # Re-assign apt to the new feat if exists
-            if self.apt is not None:
-                self.feat.apt = self.apt
+            self._ensure_apt_attached()
 
 def vit_pt_imnet(out_dim, ema_coeff, tasks=[], prompt_flag = 'None', prompt_param=None):
     return ViTZoo(num_classes=out_dim, ema_coeff=ema_coeff, pt=True, prompt_flag=prompt_flag, prompt_param=prompt_param, tasks=tasks)

@@ -52,6 +52,26 @@ class VisionTransformerMoCo(VisionTransformer):
                 self.patch_embed.proj.weight.requires_grad = False
                 self.patch_embed.proj.bias.requires_grad = False
 
+    def forward(self, x, prompt=None, train=False):
+        B = x.shape[0]
+        x = self.patch_embed(x)
+
+        # Stolen from timm/moco
+        cls_tokens = self.cls_token.expand(B, -1, -1)  # stole cls_tokens impl from Phil Wang, thanks
+        x = torch.cat((cls_tokens, x), dim=1)
+        x = x + self.pos_embed
+        x = self.pos_drop(x)
+
+        # Chuyển tiếp qua từng Block kèm theo Prompt (đã sửa ở vit.py)
+        for i, blk in enumerate(self.blocks):
+            if prompt is not None:
+                # Gọi prompt.forward để lấy giá trị cộng thêm cho CLS token ở layer i
+                x = blk(x, prompt.forward(i, x, train=train))
+            else:
+                x = blk(x)
+
+        x = self.norm(x)
+        return x
     def build_2d_sincos_position_embedding(self, temperature=10000.):
         h, w = self.patch_embed.grid_size
         grid_w = torch.arange(w, dtype=torch.float32)

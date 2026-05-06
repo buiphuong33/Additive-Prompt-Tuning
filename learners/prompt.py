@@ -41,13 +41,11 @@ class Prompt_Learner(NormalNN):
             model_ref = self.model
         print('*****************************************')
         params_to_opt = []
-        
+        if hasattr(model_ref, 'apt') and model_ref.apt is not None:
+            params_to_opt += list(model_ref.apt.parameters())
+        elif hasattr(model_ref, 'prompt') and model_ref.prompt is not None:
+            params_to_opt += list(model_ref.prompt.parameters())
         # Lấy tham số từ module APT (nơi chứa Prompt và Gate)
-        if hasattr(model_ref.feat, 'apt'):
-            params_to_opt += list(model_ref.feat.apt.parameters())
-        else:
-            # Backup trường hợp tên thuộc tính khác (nếu có)
-            print("Cảnh báo: Không tìm thấy module 'apt' trong model_ref.feat")
         
         if hasattr(model_ref, 'last'):
             params_to_opt += list(model_ref.last.parameters())
@@ -115,8 +113,15 @@ class APT_Learner(Prompt_Learner):
         # Lưu ý: Xử lý cả trường hợp dùng DataParallel
         model_ref = self.model.module if isinstance(self.model, torch.nn.DataParallel) else self.model
         # feat là VisionTransformer, apt là module APT chúng ta đã sửa ở zoo.py
-        gate_vals = model_ref.feat.apt.current_gate_values 
+        #gate_vals = model_ref.feat.apt.current_gate_values 
+        feat = getattr(model_ref, 'feat', None)
+        apt = getattr(feat, 'apt', None) if feat else None
 
+        if apt is not None:
+            gate_vals = apt.current_gate_values
+            if gate_vals is not None:
+                # Tính toán loss dựa trên gate_vals...
+                pass
         # 3. Tính toán Loss
         logits = logits[:,:self.valid_out_dim]
         logits[:,:self.last_valid_out_dim] = -float('inf')
