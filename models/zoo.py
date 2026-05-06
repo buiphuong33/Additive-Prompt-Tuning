@@ -144,7 +144,8 @@ class ViTZoo(nn.Module):
             # Chú ý: Truyền tham số đúng từ prompt_param
             self.apt = APT(768, n_tasks=len(tasks), prompt_param=prompt_param, ema_coeff=ema_coeff)
             # Quan trọng: Gán apt vào backbone để vit.py có thể truy cập qua prompt.forward
-            self.feat.apt = self.apt 
+            if self.feat is not None:
+                self.feat.apt = self.apt 
         else:
             self.apt = None
 
