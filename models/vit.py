@@ -1,4 +1,4 @@
-#vit.py
+# models/vit.py
 '''
  * Based on vit from blip code base
  * https://github.com/salesforce/BLIP
@@ -108,6 +108,7 @@ class Block(nn.Module):
         self.norm2 = norm_layer(dim)
         mlp_hidden_dim = int(dim * mlp_ratio)
         self.mlp = Mlp(in_features=dim, hidden_features=mlp_hidden_dim, act_layer=act_layer, drop=drop)
+
     def forward(self, x, register_hook=False, prompt=None,layer=-1):
         if prompt is not None:
             if type(prompt) is list: # attention;[k,v]
@@ -197,29 +198,26 @@ class VisionTransformer(nn.Module):
         x = torch.cat((cls_tokens, x), dim=1)
         x = x + self.pos_embed[:,:x.size(1),:]
         x = self.pos_drop(x)
-
-        prepend_layers =[]# [0,1,2,3,4,5,6,7,8,9,10,11]
-        add_layers = [0,1,2,3,4,5,6,7,8,9,10,11]
+        add_layers = list(range(len(self.blocks)))
+        # prepend_layers =[]# [0,1,2,3,4,5,6,7,8,9,10,11]
+        # add_layers = [0,1,2,3,4,5,6,7,8,9,10,11]
 
         if prompt is None:
             for i, blk in enumerate(self.blocks):
                 x, attn = blk(x, register_blk==i)
         else:
-            query = x[:, 0, :].mean(dim=0) if not train else None  # CLS embedding for selection
-            top_k = getattr(self, 'prompt_top_k', 3)  # default top_k = 3
             for i, blk in enumerate(self.blocks):
-                if i in prepend_layers:
-                    prompt_list = prompt.forward(i, x, train=train, query=query, top_k=top_k)
-                    x = torch.cat((
-                        x[:, :1, :], # cls
-                        prompt_list,
-                        x[:, 1:, :]
-                    ), dim=1)
-                elif i in add_layers:                            
-                    prompt_list = prompt.forward(i, x, train=train, query=query, top_k=top_k)
+                if i in add_layers:
+                    prompt_list = prompt.forward(i, x, train=train)
+                    # x = torch.cat((
+                    #     x[:, :1, :], # cls
+                    #     prompt_list,
+                    #     x[:, 1:, :]
+                    # ), dim=1)
+                    x, attn = blk(x, register_blk == i, prompt=prompt_list, layer=i)
+                else:                            
+                    x, attn = blk(x, register_blk == i)
                     
-                x, attn = blk(x, register_blk==i, prompt=prompt_list, layer=i)    
-
         x = self.norm(x)
 
         return x

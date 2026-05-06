@@ -1,3 +1,4 @@
+#cifar-100.sh
 #!/bin/bash
 
 # experiment settings
@@ -15,12 +16,6 @@ LR=0.004
 SCHEDULE=30
 EMA_COEFF=0.7
 SEED_LIST=(1)
-
-# Additional loss weights
-ORTHOGONAL_WEIGHT=0.1
-CONTRASTIVE_WEIGHT=1.0
-TEMPERATURE=0.1
-PROMPT_TOP_K=3
 
 DELAY_BETWEEN_EXPERIMENTS=10
 
@@ -50,10 +45,6 @@ do
         --seed $seed \
         --ema_coeff $EMA_COEFF \
         --schedule $SCHEDULE \
-        --orthogonal_weight $ORTHOGONAL_WEIGHT \
-        --contrastive_weight $CONTRASTIVE_WEIGHT \
-        --temperature $TEMPERATURE \
-        --prompt_top_k $PROMPT_TOP_K \
         --log_dir ${OUTDIR} 2>&1 | tee "$LOG_FILE"
 
     if [ $? -eq 0 ]; then

@@ -1,4 +1,4 @@
-#trainer.py
+# trainer.py
 import os
 import sys
 import argparse
@@ -139,11 +139,6 @@ class Trainer:
         self.add_dim = 0
 
         # Prepare the self.learner (model)
-        # Debug: Check args attributes
-        # print(f"[DEBUG Trainer] args.orthogonal_weight = {getattr(args, 'orthogonal_weight', 'NOT_FOUND')}")
-        # print(f"[DEBUG Trainer] args.contrastive_weight = {getattr(args, 'contrastive_weight', 'NOT_FOUND')}")
-        # print(f"[DEBUG Trainer] args.temperature = {getattr(args, 'temperature', 'NOT_FOUND')}")
-        
         self.learner_config = {'num_classes': num_classes,
                         'lr': args.lr,
                         'debug_mode': args.debug_mode == 1,
@@ -165,11 +160,7 @@ class Trainer:
                         'tasks': self.tasks_logits,
                         'top_k': self.top_k,
                         'prompt_param':[self.num_tasks,args.prompt_param],
-                        'ema_coeff': args.ema_coeff,
-                        'orthogonal_weight': args.orthogonal_weight,
-                        'contrastive_weight': args.contrastive_weight,
-                        'temperature': args.temperature,
-                        'prompt_top_k': args.prompt_top_k
+                        'ema_coeff': args.ema_coeff
                         }
         self.learner_type, self.learner_name = args.learner_type, args.learner_name
         self.learner = learners.__dict__[self.learner_type].__dict__[self.learner_name](self.learner_config)

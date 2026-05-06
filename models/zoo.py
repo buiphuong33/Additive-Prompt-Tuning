@@ -1,4 +1,4 @@
-#zoo.py
+# models/zoo.py
 import itertools
 import torch
 import torch.nn as nn
@@ -17,6 +17,19 @@ from operator import mul
 from functools import reduce
 
 
+class SharedGate(nn.Module):
+    def __init__(self, emb_d, num_layers):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(emb_d, emb_d // 4),
+            nn.ReLU(),
+            nn.Linear(emb_d // 4, num_layers),
+            nn.Sigmoid()
+        )
+
+    def forward(self, x):
+        # x là cls_token: [batch, emb_d]
+        return self.net(x) # Output: [batch, num_layers]
 class APT(nn.Module):
     def __init__(self, emb_d, n_tasks, prompt_param, ema_coeff):
 
@@ -24,29 +37,32 @@ class APT(nn.Module):
         self.task_count = 0
         self.emb_d = emb_d
         self.n_tasks = n_tasks
-        self.head_dim = 64  # ViT-Base: 768 / 12 heads = 64
         self._init_smart(prompt_param)
+
+        self.merge_flag = True
 
         self.ema_coeff = ema_coeff
 
-        # Task-specific prompts: list of prompts for each task
-        # Shape: (24, 64) → 12 layers * 2 (k, v) * 64 (head_dim per token)
-        self.prompts = nn.ParameterList([create_prompt_with_init(12*2, self.head_dim) for _ in range(n_tasks)])
-        for prompt in self.prompts:
-            trunc_normal_(prompt, std=0.02)
+        self.prompt_tokens = create_prompt_with_init(12*2, emb_d) 
+        global_merged_prompt = torch.zeros(12*2, emb_d).cuda()
+        self.register_buffer('global_merged_prompt', global_merged_prompt.clone().detach()) 
+        
+        self.gate_net = SharedGate(emb_d, 12)
+        
+        # 2. Buffer lưu giá trị cổng trung bình để dùng cho Priority Fusion sau này
+        self.register_buffer('avg_gate_values', torch.zeros(12))
+        self.current_gate_values = None # Lưu tạm trong 1 batch để tính loss
 
-        # Storage for query statistics per task
-        self.query_means = []  # list of tensors (emb_d,) for each task
-        self.query_covs = []   # optional, list of tensors (emb_d, emb_d) for covariance
+        trunc_normal_(self.prompt_tokens, std=0.02)
 
         for i in range(12):
             setattr(self, f'k_layer_proj{i}', nn.Linear(2, 2))
             setattr(self, f'v_layer_proj{i}', nn.Linear(2, 2))
          
    
-    # def merge_prompt(self, prompt1, prompt2):
-    #     print("Merging prompt ... ")
-    #     return prompt1*self.ema_coeff + prompt2*(1-self.ema_coeff)
+    def merge_prompt(self, prompt1, prompt2):
+        print("Merging prompt ... ")
+        return prompt1*self.ema_coeff + prompt2*(1-self.ema_coeff)
 
     def _init_smart(self, prompt_param):
         self.prompt_dropout_ratio = float(prompt_param[0])
@@ -55,70 +71,68 @@ class APT(nn.Module):
     def process_task_count(self):
         self.task_count += 1
 
-    def update_statistics(self, queries):
-        # queries: tensor (N, emb_d) from CLS tokens of current task
-        mean = queries.mean(dim=0)  # (emb_d,)
-        self.query_means.append(mean.detach().cpu())
-        # Optional: covariance
-        cov = torch.cov(queries.T)  # (emb_d, emb_d)
-        self.query_covs.append(cov.detach().cpu())
+    def forward(self, l, x_block, train=False):
+        """
+        l: layer_idx
+        x_block: đầu vào của transformer block (B, N, D)
+        """
+        B, N, D = x_block.shape
 
-    def select_prompt(self, query, top_k=3):
-        # query: tensor (emb_d,) or (B, emb_d) from CLS tokens
-        if query.dim() == 2:
-            query = query.mean(dim=0)
+        # 3. Tính toán Gate Values dựa trên CLS token (x_block[:, 0])
+        # Chúng ta tính toán gate cho toàn bộ 12 lớp một lần tại layer 0
+        # và tái sử dụng cho các layer sau trong cùng 1 forward pass.
+        if l == 0:
+            cls_token = x_block[:, 0] # [B, D]
+            self.current_gate_values = self.gate_net(cls_token) # [B, 12]
+        
+        # Lấy trọng số cổng cho lớp hiện tại l
+        # current_g: [B, 1]
+        current_g = self.current_gate_values[:, l].view(B, 1)
 
-        if len(self.query_means) == 0:
-            return [0], [1.0]  # default to first task with weight 1.0
-        
-        similarities = []
-        for mean in self.query_means:
-            mean = mean.to(query.device)
-            sim = F.cosine_similarity(query.unsqueeze(0), mean.unsqueeze(0)).item()
-            similarities.append(sim)
-        
-        # Get top-k indices (highest similarity first)
-        similarities = torch.tensor(similarities)
-        top_k = min(top_k, len(similarities))
-        top_indices = torch.argsort(similarities, descending=True)[:top_k].tolist()
-        
-        # Compute softmax weights from similarities
-        top_sims = similarities[top_indices]
-        weights = F.softmax(top_sims, dim=0)
-        
-        return top_indices, weights
-
-    def forward(self, l, x_block, train=False, query=None, top_k=3):
-        B, _, _ = x_block.shape
-
-        if train:
-            # Use prompt of current task
-            task_id = getattr(self, 'task_id', 0)
-            prompt_param = self.prompts[task_id]  # shape (24, 64)
+        # 4. Chọn nguồn prompt (huấn luyện dùng prompt_tokens, test dùng global_merged)
+        if train or not self.merge_flag:
+            prompt_k = self.prompt_tokens[l*2]      # [D]
+            prompt_v = self.prompt_tokens[l*2 + 1]  # [D]
         else:
-            # Select prompts based on query and combine with weights
-            if query is not None:
-                top_indices, weights = self.select_prompt(query, top_k=top_k)
-                
-                # Weighted combination of prompts
-                prompt_param = torch.zeros(24, 64, device=x_block.device)
-                for idx, w in zip(top_indices, weights):
-                    prompt_param = prompt_param + w * self.prompts[idx].data
-            else:
-                # Fallback to first prompt
-                prompt_param = self.prompts[0]
-        
-        # Extract key and value prompts for layer l
-        # prompt_param shape: (24, 64) → 12 layers * 2 (k, v) * 64 (head_dim)
-        P_root_k = prompt_param[l*2].unsqueeze(0).unsqueeze(0).expand(B, 12, 1, 64)  # (1, 64) → (B, 12, 1, 64)
-        P_root_v = prompt_param[l*2+1].unsqueeze(0).unsqueeze(0).expand(B, 12, 1, 64)  # (1, 64) → (B, 12, 1, 64)
+            prompt_k = self.global_merged_prompt[l*2]
+            prompt_v = self.global_merged_prompt[l*2 + 1]
 
-        P_k = torch.cat((P_root_k, torch.zeros((B,12,196,64), device=x_block.device)), dim=-2)
-        P_v = torch.cat((P_root_v, torch.zeros((B,12,196,64), device=x_block.device)), dim=-2)
-        
-        P = [P_k, P_v]    
+        # 5. Áp dụng Gating (Nhân trọng số động vào prompt)
+        # prompt_k/v: [B, D]
+        prompt_k = prompt_k.unsqueeze(0) * current_g 
+        prompt_v = prompt_v.unsqueeze(0) * current_g
 
-        return P
+        # 6. Biến đổi sang định dạng Multi-head để cộng vào Attention (giống logic cũ)
+        # Giả sử: 12 heads * 64 dims = 768 (emb_d)
+        P_root_k = prompt_k.reshape(B, 12, 1, 64)
+        P_root_v = prompt_v.reshape(B, 12, 1, 64)
+
+        # Tạo padding zero cho các token còn lại (không phải CLS)
+        P_k = torch.cat((P_root_k, torch.zeros((B, 12, N-1, 64), device=x_block.device)), dim=-2)
+        P_v = torch.cat((P_root_v, torch.zeros((B, 12, N-1, 64), device=x_block.device)), dim=-2)
+        
+        return [P_k, P_v]
+    
+    @torch.no_grad()
+    def priority_fusion(self):
+        """
+        Cơ chế Hợp nhất dựa trên độ quan trọng của Cổng (thay thế merge_prompt cũ)
+        Được gọi sau khi kết thúc 1 task.
+        """
+        print("Executing Priority Fusion based on Gate Importance...")
+        for l in range(12):
+            # Trọng số alpha dựa trên mức độ mở cổng trung bình của task cũ
+            # Nếu avg_gate cao -> Task cũ dùng lớp này nhiều -> Giữ lại prompt cũ
+            alpha = self.avg_gate_values[l]
+            
+            # Cập nhật cho cả K và V prompt của lớp l
+            idx_k, idx_v = l*2, l*2 + 1
+            
+            self.global_merged_prompt[idx_k] = alpha * self.global_merged_prompt[idx_k] + \
+                                               (1 - alpha) * self.prompt_tokens[idx_k]
+                                               
+            self.global_merged_prompt[idx_v] = alpha * self.global_merged_prompt[idx_v] + \
+                                               (1 - alpha) * self.prompt_tokens[idx_v]
 
 # note - ortho init has not been found to help l2p/dual prompt
 def create_prompt_with_init(a, b, c=None, ortho=False, mean=None, std=None, init_ref=None):
@@ -173,8 +187,22 @@ class ViTZoo(nn.Module):
         else:
             self.prompt = None
 
+        if self.prompt_flag == "apt":
+            tuned_params = [
+            "clf_norm.weight","clf_norm.bias",
+            "prompt.prompt_tokens",
+            "last.weight",
+            "last.bias", 
+            ] 
+        else:
+            tuned_params = [
+            "clf_norm.weight","clf_norm.bias",
+            "last.weight",
+            "last.bias", 
+            ]
+
         for name, param in self.named_parameters():
-            if name in ["clf_norm.weight", "clf_norm.bias", "last.weight", "last.bias"] or ("prompt" in name and self.prompt_flag == "apt"):
+            if name in tuned_params:
                 param.requires_grad = True
             else:
                 param.requires_grad = False

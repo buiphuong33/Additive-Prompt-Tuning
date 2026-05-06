@@ -1,4 +1,4 @@
-#default.py
+#learners/default.py
 from __future__ import print_function
 import math
 import torch
@@ -134,24 +134,19 @@ class NormalNN(nn.Module):
                                          
         self.model.train()
 
-        # No global prompt merging in the current task-specific prompt design.
-        self.model.eval()
+        merge_flag = self.model.prompt.merge_flag
 
-        # Collect CLS embeddings for statistics
-        if hasattr(self.model, 'prompt') and hasattr(self.model.prompt, 'update_statistics'):
-            queries = []
-            with torch.no_grad():
-                for i, (x, y, task) in enumerate(train_loader):
-                    if self.gpu:
-                        x = x.cuda()
-                    # Get CLS embedding (before classifier)
-                    cls_embed = self.model.feat(x)[:, 0, :]  # CLS token from ViT
-                    queries.append(cls_embed.cpu())
-                    if i >= 10:  # Limit to first 10 batches for efficiency
-                        break
-            if queries:
-                all_queries = torch.cat(queries, dim=0)
-                self.model.prompt.update_statistics(all_queries)
+        if merge_flag:
+            if self.last_valid_out_dim == 0:
+                self.model.prompt.global_merged_prompt = self.model.prompt.prompt_tokens.clone().detach()
+            else:
+                now_task_p = self.model.prompt.prompt_tokens.clone().detach()
+                global_p = self.model.prompt.global_merged_prompt
+                merged_p = self.model.prompt.merge_prompt(global_p, now_task_p)
+                
+                self.model.prompt.global_merged_prompt.data = merged_p
+            
+        self.model.eval()
 
         self.last_valid_out_dim = self.valid_out_dim
         self.first_task = False

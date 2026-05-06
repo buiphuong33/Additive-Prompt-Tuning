@@ -1,8 +1,6 @@
-#prompt.py
+#learners/prompt.py
 from __future__ import print_function
 import torch
-import torch.nn as nn
-import torch.nn.functional as F
 import models
 from utils.metric import accuracy, AverageMeter, Timer
 from .default import NormalNN, weight_reset, accumulate_acc
@@ -12,84 +10,7 @@ class Prompt_Learner(NormalNN):
     def __init__(self, learner_config):
         self.prompt_param = learner_config['prompt_param']
         self.ema_coeff = learner_config['ema_coeff']
-        # Hyperparameters for additional losses
-        self.orthogonal_weight = learner_config.get('orthogonal_weight', 0.01)
-        self.contrastive_weight = learner_config.get('contrastive_weight', 0.1)
-        self.temperature = learner_config.get('temperature', 0.1)
-        #print(f"[DEBUG Prompt_Learner __init__] orthogonal_weight={self.orthogonal_weight}, contrastive_weight={self.contrastive_weight}, temperature={self.temperature}")
         super(Prompt_Learner, self).__init__(learner_config)
-
-    def orthogonal_loss(self):
-        """Encourage prompts from different tasks to be orthogonal."""
-        if not hasattr(self.model, 'prompt') or not hasattr(self.model.prompt, 'prompts'):
-            return torch.tensor(0.0, device=self.config['gpuid'][0] if self.gpu else 'cpu')
-        
-        prompts = self.model.prompt.prompts  # ParameterList
-        if len(prompts) <= 1:
-            return torch.tensor(0.0, device=self.config['gpuid'][0] if self.gpu else 'cpu')
-        
-        # Compute Gram matrix of prompt similarities (normalized)
-        num_tasks = len(prompts)
-        prompt_vectors = []
-        for p in prompts:
-            prompt_vectors.append(p.flatten())
-        
-        # Stack and compute correlation
-        stacked = torch.stack(prompt_vectors, dim=0)  # (num_tasks, dim)
-        # Normalize before computing Gram
-        stacked_norm = F.normalize(stacked, dim=1)
-        gram = torch.mm(stacked_norm, stacked_norm.t())  # (num_tasks, num_tasks)
-        
-        # Target: diagonal should be 1 (self-similarity), off-diagonal should be 0
-        target = torch.eye(num_tasks, device=gram.device)
-        loss = F.mse_loss(gram, target)
-        
-        return loss * self.orthogonal_weight
-
-    def contrastive_loss(self, inputs, targets):
-        """Contrastive loss on CLS embeddings to improve task discrimination."""
-        if not hasattr(self.model, 'prompt'):
-            return torch.tensor(0.0, device=self.config['gpuid'][0] if self.gpu else 'cpu')
-        
-        # Get CLS embeddings
-        self.model.eval()
-        features = self.model.feat(inputs)[:, 0, :]  # CLS token
-        self.model.train()
-        
-        # Normalize features
-        features = F.normalize(features, dim=1)
-        
-        # Compute similarity matrix with temperature
-        sim_matrix = torch.mm(features, features.t()) / self.temperature
-        
-        # Create positive mask (same target) and negative mask (different target)
-        labels = targets.unsqueeze(0)
-        pos_mask = (labels == labels.t()).float()
-        neg_mask = 1 - pos_mask
-        
-        # Mask out diagonal (self-contrast)
-        diag_mask = torch.eye(pos_mask.size(0), device=pos_mask.device)
-        pos_mask = pos_mask - diag_mask
-        
-        # InfoNCE loss with numerical stability
-        exp_sim = torch.exp(sim_matrix - sim_matrix.max(dim=1, keepdim=True)[0])
-        pos_sum = (exp_sim * pos_mask).sum(dim=1)
-        neg_sum = (exp_sim * neg_mask).sum(dim=1)
-        
-        # Avoid division by zero
-        denominator = pos_sum + neg_sum
-        denominator = torch.where(denominator > 0, denominator, torch.ones_like(denominator))
-        
-        loss = -torch.log(pos_sum / denominator + 1e-8)
-        
-        # Only compute loss where there are positive pairs
-        valid_mask = pos_sum > 0
-        if valid_mask.sum() > 0:
-            loss = loss[valid_mask].mean()
-        else:
-            loss = torch.tensor(0.0, device=features.device)
-        
-        return loss * self.contrastive_weight
 
     def update_model(self, inputs, targets):
         # logits
@@ -97,30 +18,11 @@ class Prompt_Learner(NormalNN):
         
         logits = logits[:,:self.valid_out_dim]
         logits[:,:self.last_valid_out_dim] = -float('inf')
-        ce_loss = self.criterion(logits, targets.long())
-        
-        # Additional losses
-        ortho_loss = self.orthogonal_loss()
-        cont_loss = self.contrastive_loss(inputs, targets)
-        
-        # Debug: Print detailed loss info
-        #print(f"  [DEBUG Loss] CE: {ce_loss.item():.6f}, Ortho: {ortho_loss.item():.6f} (w={self.orthogonal_weight}), Cont: {cont_loss.item():.6f} (w={self.contrastive_weight})")
-        
-        # Total loss
-        total_loss = ce_loss + ortho_loss + cont_loss
+        total_loss = self.criterion(logits, targets.long())       
         
         # step
         self.optimizer.zero_grad()
         total_loss.backward()
-        
-        # Debug: Check if prompts have gradients
-        if hasattr(self.model, 'prompt') and hasattr(self.model.prompt, 'prompts'):
-            prompt_grad_norm = 0
-            for p in self.model.prompt.prompts:
-                if p.grad is not None:
-                    prompt_grad_norm += p.grad.norm().item()
-            #print(f"  [DEBUG] Prompt grad norm: {prompt_grad_norm:.6f}")
-        
         self.optimizer.step()
         
         return total_loss.detach(), logits
@@ -156,11 +58,7 @@ class Prompt_Learner(NormalNN):
         
         # create schedules
         if self.schedule_type == 'cosine':
-            if isinstance(self.schedule, (list, tuple)):
-                K = self.schedule[-1] if len(self.schedule) > 0 else 1
-            else:
-                K = self.schedule
-            self.scheduler = CosineSchedule(self.optimizer, K=K)
+            self.scheduler = CosineSchedule(self.optimizer, K=self.schedule[-1])
         elif self.schedule_type == 'decay':
             self.scheduler = torch.optim.lr_scheduler.MultiStepLR(self.optimizer, milestones=self.schedule, gamma=0.1)
 
@@ -181,9 +79,80 @@ class APT_Learner(Prompt_Learner):
 
     def __init__(self, learner_config):
         super(APT_Learner, self).__init__(learner_config)
+        # Hệ số điều chỉnh độ thưa (sparsity), bạn có thể đưa vào config nếu muốn
+        self.reg_lambda = 0.01 
 
     def create_model(self):
         cfg = self.config
-        model = models.__dict__[cfg['model_type']].__dict__[cfg['model_name']](out_dim=self.out_dim, ema_coeff=self.ema_coeff, prompt_flag = 'apt', prompt_param=self.prompt_param, tasks=self.tasks)
+        model = models.__dict__[cfg['model_type']].__dict__[cfg['model_name']](
+            out_dim=self.out_dim, 
+            ema_coeff=self.ema_coeff, 
+            prompt_flag = 'APT', # Đảm bảo viết hoa khớp với logic trong vit.py
+            prompt_param=self.prompt_param, 
+            tasks=self.tasks
+        )
         return model
 
+    def update_model(self, inputs, targets):
+        # 1. Forward pass
+        logits = self.model(inputs, train=True)
+        
+        # 2. Truy cập vào module APT để lấy gate_values vừa tính ở forward
+        # Lưu ý: Xử lý cả trường hợp dùng DataParallel
+        model_ref = self.model.module if isinstance(self.model, torch.nn.DataParallel) else self.model
+        # feat là VisionTransformer, apt là module APT chúng ta đã sửa ở zoo.py
+        gate_vals = model_ref.feat.apt.current_gate_values 
+
+        # 3. Tính toán Loss
+        logits = logits[:,:self.valid_out_dim]
+        logits[:,:self.last_valid_out_dim] = -float('inf')
+        
+        ce_loss = self.criterion(logits, targets.long())
+        
+        # Sparsity Loss: Ép trung bình các cổng về 0 (chuẩn L1)
+        sparsity_loss = gate_vals.mean() 
+        
+        total_loss = ce_loss + self.reg_lambda * sparsity_loss
+        
+        # 4. Optimizer step
+        self.optimizer.zero_grad()
+        total_loss.backward()
+        self.optimizer.step()
+        
+        return total_loss.detach(), logits
+
+    # --- PHẦN THÊM MỚI ĐỂ XỬ LÝ TASK ---
+
+    def after_task(self):
+        """
+        Hàm này được gọi sau khi kết thúc huấn luyện một task.
+        Nó sẽ tính toán độ quan trọng của từng layer và hợp nhất prompt.
+        """
+        self.model.eval()
+        model_ref = self.model.module if isinstance(self.model, torch.nn.DataParallel) else self.model
+        
+        print("Calculating average gate values for priority fusion...")
+        
+        all_gates = []
+        # Chạy qua một phần dữ liệu (hoặc toàn bộ) task hiện tại để lấy gate trung bình
+        # Ở đây ta tận dụng chính data_loader của task hiện tại
+        with torch.no_grad():
+            # Lấy khoảng 10-20 batches là đủ để ước lượng độ quan trọng
+            for i, (inputs, targets) in enumerate(self.train_loader):
+                if i > 20: break 
+                inputs = inputs.cuda()
+                _ = self.model(inputs, train=False)
+                all_gates.append(model_ref.feat.apt.current_gate_values.mean(0)) # Mean theo batch
+        
+        # Tính trung bình cổng trên toàn bộ mẫu: kết quả là vector [12]
+        avg_g = torch.stack(all_gates).mean(0)
+        
+        # Cập nhật vào buffer của APT
+        model_ref.feat.apt.avg_gate_values.copy_(avg_g)
+        
+        # Thực hiện Priority Fusion (Hợp nhất dựa trên độ quan trọng)
+        model_ref.feat.apt.priority_fusion()
+        
+        # Tăng task count
+        model_ref.feat.apt.process_task_count()
+        super().after_task()

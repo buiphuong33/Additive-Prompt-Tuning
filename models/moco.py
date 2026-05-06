@@ -1,4 +1,4 @@
-#moco.py
+# models/moco.py
 # Copyright (c) Facebook, Inc. and its affiliates.
 # All rights reserved.
 
