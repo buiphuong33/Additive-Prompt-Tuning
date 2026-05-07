@@ -209,11 +209,7 @@ class VisionTransformer(nn.Module):
             for i, blk in enumerate(self.blocks):
                 if i in add_layers:
                     prompt_list = prompt.forward(i, x, train=train)
-                    # x = torch.cat((
-                    #     x[:, :1, :], # cls
-                    #     prompt_list,
-                    #     x[:, 1:, :]
-                    # ), dim=1)
+                    
                     x, attn = blk(x, register_blk == i, prompt=prompt_list, layer=i)
                 else:                            
                     x, attn = blk(x, register_blk == i)

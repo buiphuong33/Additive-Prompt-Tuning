@@ -39,20 +39,29 @@ class APT(nn.Module):
 
         self.merge_flag = True
         self.ema_coeff = ema_coeff
-
+        self.num_layers = 12
         # Khởi tạo prompt_tokens
-        self.prompt_tokens = create_prompt_with_init(12*2, emb_d) 
-        global_merged_prompt = torch.zeros(12*2, emb_d).cuda()
-        self.register_buffer('global_merged_prompt', global_merged_prompt.clone().detach()) 
+        self.prompt_tokens = nn.ParameterList([
+            nn.Parameter(torch.zeros(self.prompt_token_number, emb_d)) 
+            for _ in range(self.num_layers * 2)
+        ])
+
+        for p in self.prompt_tokens:
+            trunc_normal_(p, std=0.02)
+
+        self.register_buffer('global_merged_prompt', torch.zeros(self.num_layers * 2, self.prompt_token_number, emb_d))
+        #self.prompt_tokens = create_prompt_with_init(12*2, emb_d) 
+        #global_merged_prompt = torch.zeros(12*2, emb_d).cuda()
+        #self.register_buffer('global_merged_prompt', global_merged_prompt.clone().detach()) 
         
         # Shared Gate
-        self.gate_net = SharedGate(emb_d, 12)
+        self.gate_net = SharedGate(emb_d, self.num_layers)
         
         # Buffer lưu giá trị cổng trung bình
-        self.register_buffer('avg_gate_values', torch.zeros(12))
+        self.register_buffer('avg_gate_values', torch.zeros(self.num_layers))
         self.current_gate_values = None 
 
-        trunc_normal_(self.prompt_tokens, std=0.02)
+        #trunc_normal_(self.prompt_tokens, std=0.02)
 
     def _init_smart(self, prompt_param):
         # 1. Hàm phụ để lấy tất cả các giá trị số ra khỏi các lớp list bọc nhau
@@ -100,30 +109,30 @@ class APT(nn.Module):
         B, N, D = x_block.shape
 
         # Tính toán Gate tại layer 0
-        if l == 0:
+        if l == 0 or self.current_gate_values is None:
             cls_token = x_block[:, 0]
             self.current_gate_values = self.gate_net(cls_token)
         
         current_g = self.current_gate_values[:, l].view(B, 1)
-
+        idx_k, idx_v = l*2, l*2 + 1
         # Chọn prompt
         if train or not self.merge_flag:
-            prompt_k = self.prompt_tokens[l*2]
-            prompt_v = self.prompt_tokens[l*2 + 1]
+            prompt_k = self.prompt_tokens[idx_k]
+            prompt_v = self.prompt_tokens[idx_v]
         else:
-            prompt_k = self.global_merged_prompt[l*2]
-            prompt_v = self.global_merged_prompt[l*2 + 1]
+            prompt_k = self.global_merged_prompt[idx_k]
+            prompt_v = self.global_merged_prompt[idx_v]
 
         # Áp dụng Gate
         prompt_k = prompt_k.unsqueeze(0) * current_g 
         prompt_v = prompt_v.unsqueeze(0) * current_g
 
         # Reshape sang Multi-head (12 heads * 64 dims)
-        P_root_k = prompt_k.reshape(B, 12, 1, 64)
-        P_root_v = prompt_v.reshape(B, 12, 1, 64)
+        P_root_k = prompt_k.reshape(B, 12, self.prompt_token_number, 64)
+        P_root_v = prompt_v.reshape(B, 12, self.prompt_token_number, 64)
 
-        P_k = torch.cat((P_root_k, torch.zeros((B, 12, N-1, 64), device=x_block.device)), dim=-2)
-        P_v = torch.cat((P_root_v, torch.zeros((B, 12, N-1, 64), device=x_block.device)), dim=-2)
+        P_k = torch.cat((P_root_k, torch.zeros((B, 12, N-self.prompt_token_number, 64), device=x_block.device)), dim=-2)
+        P_v = torch.cat((P_root_v, torch.zeros((B, 12, N-self.prompt_token_number, 64), device=x_block.device)), dim=-2)
         
         return [P_k, P_v]
     
@@ -180,9 +189,10 @@ class ViTZoo(nn.Module):
             self.apt = APT(768, n_tasks=len(tasks), prompt_param=prompt_param, ema_coeff=ema_coeff)
             # Quan trọng: Gán apt vào backbone để vit.py có thể truy cập qua prompt.forward
             # if self.feat is not None:
-            #     self.feat.apt = self.apt 
+            self.prompt = self.apt 
         else:
             self.apt = None
+            self.prompt = None
 
         # 3. Classifier
         self.last = nn.Linear(768, num_classes) 
