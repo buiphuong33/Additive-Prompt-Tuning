@@ -1,4 +1,4 @@
-#cifar-100.sh
+#experiments/cifar-100.sh
 #!/bin/bash
 
 # experiment settings
