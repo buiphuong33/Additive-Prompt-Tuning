@@ -55,28 +55,44 @@ class APT(nn.Module):
         trunc_normal_(self.prompt_tokens, std=0.02)
 
     def _init_smart(self, prompt_param):
-        if isinstance(prompt_param, list) and len(prompt_param) > 0:
-            if isinstance(prompt_param[0], list):
-                prompt_param = prompt_param[0]
+        # 1. Hàm phụ để lấy tất cả các giá trị số ra khỏi các lớp list bọc nhau
+        def flatten_params(nested_list):
+            flat_list = []
+            if not isinstance(nested_list, (list, tuple)):
+                return [nested_list]
+            for item in nested_list:
+                if isinstance(item, (list, tuple)):
+                    flat_list.extend(flatten_params(item))
+                else:
+                    flat_list.append(item)
+            return flat_list
 
-        # 2. Ép kiểu an toàn sang float
+        # 2. Làm phẳng và ép kiểu
         try:
-            p_param = [float(i) for i in prompt_param]
+            temp_list = flatten_params(prompt_param)
+            # Lọc bỏ các giá trị không phải là số hoặc chuỗi số (nếu có)
+            # Và chỉ lấy 3 giá trị cuối cùng (thường là 10, 0.1, 768)
+            p_param = [float(i) for i in temp_list if str(i).replace('.','',1).isdigit()]
+            
+            # Nếu sau khi lọc mà có nhiều hơn 3 số, ta lấy 3 số cuối cùng 
+            # vì số 10 dư thừa thường nằm ở đầu do lỗi argparse
+            if len(p_param) > 3:
+                p_param = p_param[-3:]
+                
+            self.prompt_token_number = int(p_param[0]) 
+            self.prompt_dropout_ratio = p_param[1]      
+            self.prompt_len = int(p_param[2])
+            
         except Exception as e:
-            print(f"Lỗi định dạng prompt_param: {prompt_param}")
+            print(f"Lỗi định dạng prompt_param gốc: {prompt_param}")
+            print(f"Dữ liệu sau khi làm phẳng: {temp_list}")
             raise e
         
-        # 3. Gán giá trị
-        self.prompt_token_number = int(p_param[0]) 
-        self.prompt_dropout_ratio = p_param[1]      
-        self.prompt_len = int(p_param[2])          
-        
-        # Tự động quy đổi nếu lỡ truyền 10 thay vì 0.1
+        # 3. Kiểm tra an toàn cho Dropout
         if self.prompt_dropout_ratio > 1.0:
             self.prompt_dropout_ratio /= 100.0
             
         self.prompt_dropout = nn.Dropout(self.prompt_dropout_ratio)
-
     def process_task_count(self):
         self.task_count += 1
 
