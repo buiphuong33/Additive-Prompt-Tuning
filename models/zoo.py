@@ -55,7 +55,16 @@ class APT(nn.Module):
         trunc_normal_(self.prompt_tokens, std=0.02)
 
     def _init_smart(self, prompt_param):
-        self.prompt_dropout_ratio = float(prompt_param[0])
+        p_param = [float(i) for i in prompt_param]
+        
+        self.prompt_token_number = int(p_param[0]) # Số lượng token
+        self.prompt_dropout_ratio = p_param[1]      # Tỉ lệ dropout (0.1)
+        self.prompt_len = int(p_param[2])          # 768
+        
+        # Nếu lỡ truyền 10 (cho 10%), tự động quy đổi về 0.1
+        if self.prompt_dropout_ratio > 1.0:
+            self.prompt_dropout_ratio /= 100.0
+            
         self.prompt_dropout = nn.Dropout(self.prompt_dropout_ratio)
 
     def process_task_count(self):
