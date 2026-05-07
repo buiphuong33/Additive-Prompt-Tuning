@@ -55,13 +55,23 @@ class APT(nn.Module):
         trunc_normal_(self.prompt_tokens, std=0.02)
 
     def _init_smart(self, prompt_param):
-        p_param = [float(i) for i in prompt_param]
+        if isinstance(prompt_param, list) and len(prompt_param) > 0:
+            if isinstance(prompt_param[0], list):
+                prompt_param = prompt_param[0]
+
+        # 2. Ép kiểu an toàn sang float
+        try:
+            p_param = [float(i) for i in prompt_param]
+        except Exception as e:
+            print(f"Lỗi định dạng prompt_param: {prompt_param}")
+            raise e
         
-        self.prompt_token_number = int(p_param[0]) # Số lượng token
-        self.prompt_dropout_ratio = p_param[1]      # Tỉ lệ dropout (0.1)
-        self.prompt_len = int(p_param[2])          # 768
+        # 3. Gán giá trị
+        self.prompt_token_number = int(p_param[0]) 
+        self.prompt_dropout_ratio = p_param[1]      
+        self.prompt_len = int(p_param[2])          
         
-        # Nếu lỡ truyền 10 (cho 10%), tự động quy đổi về 0.1
+        # Tự động quy đổi nếu lỡ truyền 10 thay vì 0.1
         if self.prompt_dropout_ratio > 1.0:
             self.prompt_dropout_ratio /= 100.0
             
