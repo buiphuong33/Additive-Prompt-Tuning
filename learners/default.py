@@ -138,7 +138,8 @@ class NormalNN(nn.Module):
 
         if merge_flag:
             if self.last_valid_out_dim == 0:
-                self.model.apt.global_merged_prompt = self.model.apt.prompt_tokens.clone().detach()
+                tokens_tensor = torch.stack(list(self.model.apt.prompt_tokens))
+                self.model.apt.global_merged_prompt.copy_(tokens_tensor.detach())
             else:
                 now_task_p = self.model.apt.prompt_tokens.clone().detach()
                 global_p = self.model.apt.global_merged_prompt

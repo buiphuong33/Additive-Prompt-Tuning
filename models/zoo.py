@@ -142,13 +142,18 @@ class APT(nn.Module):
     @torch.no_grad()
     def priority_fusion(self):
         print("Executing Priority Fusion based on Gate Importance...")
-        for l in range(12):
+        for l in range(self.num_layers):
             alpha = self.avg_gate_values[l]
             idx_k, idx_v = l*2, l*2 + 1
-            self.global_merged_prompt[idx_k] = alpha * self.global_merged_prompt[idx_k] + \
-                                               (1 - alpha) * self.prompt_tokens[idx_k]
-            self.global_merged_prompt[idx_v] = alpha * self.global_merged_prompt[idx_v] + \
-                                               (1 - alpha) * self.prompt_tokens[idx_v]
+
+            current_p_k = self.prompt_tokens[idx_k]
+            current_p_v = self.prompt_tokens[idx_v]
+
+            new_k = alpha * self.global_merged_prompt[idx_k] + (1 - alpha) * current_p_k
+            self.global_merged_prompt[idx_k].copy_(new_k)    
+            
+            new_v = alpha * self.global_merged_prompt[idx_v] + (1 - alpha) * current_p_v
+            self.global_merged_prompt[idx_v].copy_(new_v)
 
 def create_prompt_with_init(a, b, c=None, ortho=False, mean=None, std=None, init_ref=None):
     if c is None:
