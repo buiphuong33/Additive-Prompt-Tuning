@@ -99,7 +99,7 @@ class APT_Learner(Prompt_Learner):
         model = models.__dict__[cfg['model_type']].__dict__[cfg['model_name']](
             out_dim=self.out_dim, 
             ema_coeff=self.ema_coeff, 
-            prompt_flag = 'APT', # Đảm bảo viết hoa khớp với logic trong vit.py
+            prompt_flag = 'apt', # Đảm bảo viết hoa khớp với logic trong vit.py
             prompt_param=self.prompt_param, 
             tasks=self.tasks
         )
