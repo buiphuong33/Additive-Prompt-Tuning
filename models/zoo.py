@@ -151,10 +151,31 @@ class APT(nn.Module):
 
             new_k = alpha * self.global_merged_prompt[idx_k] + (1 - alpha) * current_p_k
             self.global_merged_prompt[idx_k].copy_(new_k)    
-            
+
             new_v = alpha * self.global_merged_prompt[idx_v] + (1 - alpha) * current_p_v
             self.global_merged_prompt[idx_v].copy_(new_v)
-
+    @torch.no_grad()
+    def merge_prompt(self, global_p, now_p):
+        """
+        global_p: Prompt từ các task trước [24, 10, 768]
+        now_p: Prompt từ task vừa học xong [24, 10, 768]
+        """
+        # Tạo một tensor trống để chứa kết quả trộn
+        merged_result = torch.zeros_like(now_p)
+        
+        for l in range(self.num_layers):
+            alpha = self.avg_gate_values[l]
+            idx_k, idx_v = l * 2, l * 2 + 1
+            
+            # Trộn Key
+            merged_result[idx_k] = alpha * global_p[idx_k] + (1 - alpha) * now_p[idx_k]
+            # Trộn Value
+            merged_result[idx_v] = alpha * global_p[idx_v] + (1 - alpha) * now_p[idx_v]
+            
+        # Cập nhật ngược lại vào buffer chính của model để dùng cho Inference
+        self.global_merged_prompt.copy_(merged_result)
+        
+        return merged_result
 def create_prompt_with_init(a, b, c=None, ortho=False, mean=None, std=None, init_ref=None):
     if c is None:
         p = torch.nn.Parameter(torch.FloatTensor(a,b), requires_grad=True)
