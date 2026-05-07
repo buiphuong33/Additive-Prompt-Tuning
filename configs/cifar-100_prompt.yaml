@@ -7,6 +7,8 @@ momentum: 0.9
 weight_decay: 0
 model_type: zoo
 model_name: vit_pt_imnet
+prompt_param: [10, 0.1, 768] # 10 tokens, dropout 0.1 (10%), kích thước 768
+ema_coeff: 0.5
 max_task: -1
 dataroot: data
 workers: 4
