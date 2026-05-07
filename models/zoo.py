@@ -113,7 +113,7 @@ class APT(nn.Module):
             cls_token = x_block[:, 0]
             self.current_gate_values = self.gate_net(cls_token)
         
-        current_g = self.current_gate_values[:, l].view(B, 1)
+        current_g = self.current_gate_values[:, l].view(B, 1, 1)
         idx_k, idx_v = l*2, l*2 + 1
         # Chọn prompt
         if train or not self.merge_flag:
@@ -128,11 +128,14 @@ class APT(nn.Module):
         prompt_v = prompt_v.unsqueeze(0) * current_g
 
         # Reshape sang Multi-head (12 heads * 64 dims)
-        P_root_k = prompt_k.reshape(B, 12, self.prompt_token_number, 64)
-        P_root_v = prompt_v.reshape(B, 12, self.prompt_token_number, 64)
+        P_root_k = prompt_k.reshape(B, 10, 12, 64).permute(0, 2, 1, 3)
+        P_root_v = prompt_v.reshape(B, 10, 12, 64).permute(0, 2, 1, 3)
 
-        P_k = torch.cat((P_root_k, torch.zeros((B, 12, N-self.prompt_token_number, 64), device=x_block.device)), dim=-2)
-        P_v = torch.cat((P_root_v, torch.zeros((B, 12, N-self.prompt_token_number, 64), device=x_block.device)), dim=-2)
+        padding_k = torch.zeros((B, 12, N - 10, 64), device=x_block.device)
+        padding_v = torch.zeros((B, 12, N - 10, 64), device=x_block.device)
+        
+        P_k = torch.cat((P_root_k, padding_k), dim=-2)
+        P_v = torch.cat((P_root_v, padding_v), dim=-2)
         
         return [P_k, P_v]
     
