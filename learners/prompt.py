@@ -36,8 +36,12 @@ class Prompt_Learner(NormalNN):
         print('*****************************************')
         params_to_opt = [p for p in self.model.parameters() if p.requires_grad]
 
-        print(f'*** Số lượng tensor tham số được tối ưu: {len(params_to_opt)} ***')    
-        
+        print(f'*** Số lượng tensor tham số được tối ưu: {len(params_to_opt)} ***') 
+        print("--- Danh sách chi tiết 9 tensor đang học ---")
+        for name, param in self.model.named_parameters():
+            if param.requires_grad:
+                print(f"Tên: {name} | Hình dạng: {list(param.shape)}")   
+                
         if len(params_to_opt) == 0:
             print("CẢNH BÁO: Không tìm thấy tham số nào để tối ưu! Kiểm tra lại file zoo.py")
 
