@@ -33,24 +33,24 @@ class Prompt_Learner(NormalNN):
     # sets model optimizers
     def init_optimizer(self):
 
-        # parse optimizer args
-        # Multi-GPU
-        if len(self.config['gpuid']) > 1:
-            model_ref = self.model.module
-        else:
-            model_ref = self.model
         print('*****************************************')
-        params_to_opt = []
-        if hasattr(model_ref, 'apt') and model_ref.apt is not None:
-            params_to_opt += list(model_ref.apt.parameters())
-        elif hasattr(model_ref, 'prompt') and model_ref.prompt is not None:
-            params_to_opt += list(model_ref.prompt.parameters())
-        # Lấy tham số từ module APT (nơi chứa Prompt và Gate)
-        
-        if hasattr(model_ref, 'last'):
-            params_to_opt += list(model_ref.last.parameters())
+        params_to_opt = [p for p in self.model.parameters() if p.requires_grad]
 
-        print(f'*** Số lượng nhóm tham số được tối ưu: {len(params_to_opt)} ***')    
+        print(f'*** Số lượng tensor tham số được tối ưu: {len(params_to_opt)} ***')    
+        
+        if len(params_to_opt) == 0:
+            print("CẢNH BÁO: Không tìm thấy tham số nào để tối ưu! Kiểm tra lại file zoo.py")
+
+        # if hasattr(model_ref, 'apt') and model_ref.apt is not None:
+        #     params_to_opt += list(model_ref.apt.parameters())
+        # elif hasattr(model_ref, 'prompt') and model_ref.prompt is not None:
+        #     params_to_opt += list(model_ref.prompt.parameters())
+        # # Lấy tham số từ module APT (nơi chứa Prompt và Gate)
+        
+        # if hasattr(model_ref, 'last'):
+        #     params_to_opt += list(model_ref.last.parameters())
+
+        # print(f'*** Số lượng nhóm tham số được tối ưu: {len(params_to_opt)} ***')    
         
         optimizer_arg = {'params':params_to_opt,
                          'lr':self.config['lr'],
@@ -114,24 +114,25 @@ class APT_Learner(Prompt_Learner):
         model_ref = self.model.module if isinstance(self.model, torch.nn.DataParallel) else self.model
         # feat là VisionTransformer, apt là module APT chúng ta đã sửa ở zoo.py
         #gate_vals = model_ref.feat.apt.current_gate_values 
+        gate_vals = None
+        sparsity_loss = torch.tensor(0.).cuda()
         feat = getattr(model_ref, 'feat', None)
         apt = getattr(feat, 'apt', None) if feat else None
 
         if apt is not None:
-            gate_vals = apt.current_gate_values
+            gate_vals = getattr(apt, 'current_gate_values', None)
             if gate_vals is not None:
                 # Tính toán loss dựa trên gate_vals...
-                pass
+                sparsity_loss = gate_vals.mean()
         # 3. Tính toán Loss
         logits = logits[:,:self.valid_out_dim]
         logits[:,:self.last_valid_out_dim] = -float('inf')
         
         ce_loss = self.criterion(logits, targets.long())
         
-        # Sparsity Loss: Ép trung bình các cổng về 0 (chuẩn L1)
-        sparsity_loss = gate_vals.mean() 
+        reg_lambda = 0.01
         
-        total_loss = ce_loss + self.reg_lambda * sparsity_loss
+        total_loss = ce_loss + reg_lambda * sparsity_loss
         
         # 4. Optimizer step
         self.optimizer.zero_grad()
