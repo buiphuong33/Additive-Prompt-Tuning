@@ -68,7 +68,7 @@ class Attention(nn.Module):
     def get_attention_map(self):
         return self.attention_map
     
-    def forward(self, x, register_hook=False, prompt=None,layer=-1):
+    def forward(self, x, register_hook=False, prompt_module=None, layer_idx=None, train_flag=True):
         B, N, C = x.shape
         dynamic_prompt_k, dynamic_prompt_v = None, None
         if prompt_module is not None and layer_idx is not None:
@@ -114,7 +114,7 @@ class Block(nn.Module):
         mlp_hidden_dim = int(dim * mlp_ratio)
         self.mlp = Mlp(in_features=dim, hidden_features=mlp_hidden_dim, act_layer=act_layer, drop=drop)
 
-    def forward(self, x, register_hook=False, prompt=None,layer=-1):
+    def forward(self, x, register_hook=False, prompt_module=None, layer_idx=None, train_flag=True):
         _x, attn = self.attn(
             self.norm1(x), 
             register_hook=register_hook, 
@@ -194,7 +194,7 @@ class VisionTransformer(nn.Module):
     def no_weight_decay(self):
         return {'pos_embed', 'cls_token'}
 
-    def forward(self, x, register_blk=-1, prompt=None, q=None, train=False, task_id=None):
+    def forward(self, x, register_blk=-1, prompt_module=None, train_flag=True):
         B = x.shape[0]
         x = self.patch_embed(x)
         
