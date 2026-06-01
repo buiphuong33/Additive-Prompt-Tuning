@@ -1,4 +1,4 @@
-#learners/prompt.py
+# /learners/prompt.py
 from __future__ import print_function
 import torch
 import models
@@ -33,29 +33,13 @@ class Prompt_Learner(NormalNN):
     # sets model optimizers
     def init_optimizer(self):
 
+        # parse optimizer args
+        # Multi-GPU
+        if len(self.config['gpuid']) > 1:
+            params_to_opt = list(self.model.module.prompt.parameters()) + list(self.model.module.last.parameters())
+        else:
+            params_to_opt = list(self.model.prompt.parameters()) + list(self.model.last.parameters())
         print('*****************************************')
-        params_to_opt = [p for p in self.model.parameters() if p.requires_grad]
-
-        print(f'*** Số lượng tensor tham số được tối ưu: {len(params_to_opt)} ***') 
-        print("--- Danh sách chi tiết 9 tensor đang học ---")
-        for name, param in self.model.named_parameters():
-            if param.requires_grad:
-                print(f"Tên: {name} | Hình dạng: {list(param.shape)}")   
-                
-        if len(params_to_opt) == 0:
-            print("CẢNH BÁO: Không tìm thấy tham số nào để tối ưu! Kiểm tra lại file zoo.py")
-
-        # if hasattr(model_ref, 'apt') and model_ref.apt is not None:
-        #     params_to_opt += list(model_ref.apt.parameters())
-        # elif hasattr(model_ref, 'prompt') and model_ref.prompt is not None:
-        #     params_to_opt += list(model_ref.prompt.parameters())
-        # # Lấy tham số từ module APT (nơi chứa Prompt và Gate)
-        
-        # if hasattr(model_ref, 'last'):
-        #     params_to_opt += list(model_ref.last.parameters())
-
-        # print(f'*** Số lượng nhóm tham số được tối ưu: {len(params_to_opt)} ***')    
-        
         optimizer_arg = {'params':params_to_opt,
                          'lr':self.config['lr'],
                          'weight_decay':self.config['weight_decay']}
@@ -95,88 +79,66 @@ class APT_Learner(Prompt_Learner):
 
     def __init__(self, learner_config):
         super(APT_Learner, self).__init__(learner_config)
-        # Hệ số điều chỉnh độ thưa (sparsity), bạn có thể đưa vào config nếu muốn
-        self.reg_lambda = 0.01 
 
     def create_model(self):
         cfg = self.config
         model = models.__dict__[cfg['model_type']].__dict__[cfg['model_name']](
             out_dim=self.out_dim, 
             ema_coeff=self.ema_coeff, 
-            prompt_flag = 'apt', # Đảm bảo viết hoa khớp với logic trong vit.py
+            prompt_flag='apt', 
             prompt_param=self.prompt_param, 
             tasks=self.tasks
         )
         return model
 
+    def init_optimizer(self):
+        if len(self.config['gpuid']) > 1:
+            prompt_module = self.model.module.prompt
+            last_module = self.model.module.last
+        else:
+            prompt_module = self.model.prompt
+            last_module = self.model.last
+
+        # Gom toàn bộ tham số của APT module (gồm prompt_tokens, dynamic_projs,...) và Classifier Head
+        params_to_opt = list(prompt_module.parameters()) + list(last_module.parameters())
+        
+        print('*****************************************')
+        print(f"Initializing optimizer for APT. Parameter groups: {len(params_to_opt)}")
+        print('*****************************************')
+        
+        optimizer_arg = {'params': params_to_opt,
+                         'lr': self.config['lr'],
+                         'weight_decay': self.config['weight_decay']}
+                         
+        if self.config['optimizer'] in ['SGD', 'RMSprop']:
+            optimizer_arg['momentum'] = self.config['momentum']
+        elif self.config['optimizer'] in ['Rprop']:
+            optimizer_arg.pop('weight_decay')
+        elif self.config['optimizer'] == 'amsgrad':
+            optimizer_arg['amsgrad'] = True
+            self.config['optimizer'] = 'Adam'
+        elif self.config['optimizer'] == 'Adam':
+            optimizer_arg['betas'] = (self.config['momentum'], 0.999)
+
+        self.optimizer = torch.optim.__dict__[self.config['optimizer']](**optimizer_arg)
+        
+        if self.schedule_type == 'cosine':
+            self.scheduler = CosineSchedule(self.optimizer, K=self.schedule[-1])
+        elif self.schedule_type == 'decay':
+            self.scheduler = torch.optim.lr_scheduler.MultiStepLR(self.optimizer, milestones=self.schedule, gamma=0.1)
+
     def update_model(self, inputs, targets):
-        # 1. Forward pass
+        # Forward pass nhận logits từ mô hình APT cải tiến
         logits = self.model(inputs, train=True)
         
-        # 2. Truy cập vào module APT để lấy gate_values vừa tính ở forward
-        # Lưu ý: Xử lý cả trường hợp dùng DataParallel
-        model_ref = self.model.module if isinstance(self.model, torch.nn.DataParallel) else self.model
-        # feat là VisionTransformer, apt là module APT chúng ta đã sửa ở zoo.py
-        #gate_vals = model_ref.feat.apt.current_gate_values 
-        gate_vals = None
-        sparsity_loss = torch.tensor(0.).cuda()
-        feat = getattr(model_ref, 'feat', None)
-        apt = getattr(feat, 'apt', None) if feat else None
-
-        if apt is not None:
-            gate_vals = getattr(apt, 'current_gate_values', None)
-            if gate_vals is not None:
-                # Tính toán loss dựa trên gate_vals...
-                sparsity_loss = gate_vals.mean()
-        # 3. Tính toán Loss
-        logits = logits[:,:self.valid_out_dim]
-        logits[:,:self.last_valid_out_dim] = -float('inf')
+        logits = logits[:, :self.valid_out_dim]
+        logits[:, :self.last_valid_out_dim] = -float('inf')
         
-        ce_loss = self.criterion(logits, targets.long())
+        # CHỈ tính Loss phân loại tiêu chuẩn (CrossEntropy)
+        loss_ce = self.criterion(logits, targets.long())       
         
-        reg_lambda = 0.01
-        
-        total_loss = ce_loss + reg_lambda * sparsity_loss
-        
-        # 4. Optimizer step
         self.optimizer.zero_grad()
-        total_loss.backward()
+        loss_ce.backward()
         self.optimizer.step()
         
-        return total_loss.detach(), logits
-
-    # --- PHẦN THÊM MỚI ĐỂ XỬ LÝ TASK ---
-
-    def after_task(self):
-        """
-        Hàm này được gọi sau khi kết thúc huấn luyện một task.
-        Nó sẽ tính toán độ quan trọng của từng layer và hợp nhất prompt.
-        """
-        self.model.eval()
-        model_ref = self.model.module if isinstance(self.model, torch.nn.DataParallel) else self.model
-        
-        print("Calculating average gate values for priority fusion...")
-        
-        all_gates = []
-        # Chạy qua một phần dữ liệu (hoặc toàn bộ) task hiện tại để lấy gate trung bình
-        # Ở đây ta tận dụng chính data_loader của task hiện tại
-        with torch.no_grad():
-            # Lấy khoảng 10-20 batches là đủ để ước lượng độ quan trọng
-            for i, (inputs, targets) in enumerate(self.train_loader):
-                if i > 20: break 
-                inputs = inputs.cuda()
-                _ = self.model(inputs, train=False)
-                all_gates.append(model_ref.feat.apt.current_gate_values.mean(0)) # Mean theo batch
-        
-        # Tính trung bình cổng trên toàn bộ mẫu: kết quả là vector [12]
-        avg_g = torch.stack(all_gates).mean(0)
-        
-        # Cập nhật vào buffer của APT
-        model_ref.feat.apt.avg_gate_values.copy_(avg_g)
-        
-        # Thực hiện Priority Fusion (Hợp nhất dựa trên độ quan trọng)
-        model_ref.feat.apt.priority_fusion()
-        
-        # Tăng task count
-        model_ref.feat.apt.process_task_count()
-        super().after_task()
+        return loss_ce.detach(), logits

@@ -1,4 +1,4 @@
-# models/moco.py
+# /models/moco.py
 # Copyright (c) Facebook, Inc. and its affiliates.
 # All rights reserved.
 
@@ -33,13 +33,17 @@ class VisionTransformerMoCo(VisionTransformer):
         # weight initialization
         for name, m in self.named_modules():
             if isinstance(m, nn.Linear):
+                if 'dynamic_proj' in name or 'prompt' in name:
+                    continue
                 if 'qkv' in name:
                     # treat the weights of Q, K, V separately
                     val = math.sqrt(6. / float(m.weight.shape[0] // 3 + m.weight.shape[1]))
                     nn.init.uniform_(m.weight, -val, val)
                 else:
                     nn.init.xavier_uniform_(m.weight)
-                nn.init.zeros_(m.bias)
+                if m.bias is not None:
+                    nn.init.zeros_(m.bias)
+                    
         nn.init.normal_(self.cls_token, std=1e-6)
 
         if isinstance(self.patch_embed, PatchEmbed):
@@ -52,26 +56,6 @@ class VisionTransformerMoCo(VisionTransformer):
                 self.patch_embed.proj.weight.requires_grad = False
                 self.patch_embed.proj.bias.requires_grad = False
 
-    def forward(self, x, prompt=None, train=False):
-        B = x.shape[0]
-        x = self.patch_embed(x)
-
-        # Stolen from timm/moco
-        cls_tokens = self.cls_token.expand(B, -1, -1)  # stole cls_tokens impl from Phil Wang, thanks
-        x = torch.cat((cls_tokens, x), dim=1)
-        x = x + self.pos_embed
-        x = self.pos_drop(x)
-
-        # Chuyển tiếp qua từng Block kèm theo Prompt (đã sửa ở vit.py)
-        for i, blk in enumerate(self.blocks):
-            if prompt is not None:
-                # Gọi prompt.forward để lấy giá trị cộng thêm cho CLS token ở layer i
-                x = blk(x, prompt.forward(i, x, train=train))
-            else:
-                x = blk(x)
-
-        x = self.norm(x)
-        return x
     def build_2d_sincos_position_embedding(self, temperature=10000.):
         h, w = self.patch_embed.grid_size
         grid_w = torch.arange(w, dtype=torch.float32)

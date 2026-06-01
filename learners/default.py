@@ -1,4 +1,3 @@
-#learners/default.py
 from __future__ import print_function
 import math
 import torch
@@ -134,18 +133,17 @@ class NormalNN(nn.Module):
                                          
         self.model.train()
 
-        merge_flag = self.model.apt.merge_flag
+        merge_flag = self.model.prompt.merge_flag
 
         if merge_flag:
             if self.last_valid_out_dim == 0:
-                tokens_tensor = torch.stack(list(self.model.apt.prompt_tokens))
-                self.model.apt.global_merged_prompt.copy_(tokens_tensor.detach())
+                self.model.prompt.global_merged_prompt = self.model.prompt.prompt_tokens.clone().detach()
             else:
-                now_task_p = torch.stack(list(self.model.apt.prompt_tokens)).clone().detach()
-                global_p = self.model.apt.global_merged_prompt
-                merged_p = self.model.apt.merge_prompt(global_p, now_task_p)
+                now_task_p = self.model.prompt.prompt_tokens.clone().detach()
+                global_p = self.model.prompt.global_merged_prompt
+                merged_p = self.model.prompt.merge_prompt(global_p, now_task_p)
                 
-                self.model.apt.global_merged_prompt.data = merged_p
+                self.model.prompt.global_merged_prompt.data = merged_p
             
         self.model.eval()
 
