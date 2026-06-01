@@ -176,7 +176,7 @@ class ViTZoo(nn.Module):
     def forward(self, x, train=False):
         if self.prompt is not None:
             if self.prompt_flag == 'apt':
-                out = self.feat(x, prompt=self.prompt, train=train)
+                out = self.feat(x, prompt_module=self.prompt, train=train)
                 out =  out[:,0,:]
             else: 
                 raise ValueError("prompt flag not supported")
