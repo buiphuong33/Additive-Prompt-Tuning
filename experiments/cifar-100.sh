@@ -16,7 +16,7 @@ LR=0.004
 SCHEDULE=30
 EMA_COEFF=0.7
 SEED_LIST=(2)
-PROMPT_P="10 0.1 768"
+
 DELAY_BETWEEN_EXPERIMENTS=10
 
 # SỬA LỖI TẠO THƯ MỤC: Tạo cả thư mục con theo DATASET
@@ -40,7 +40,7 @@ do
         --overwrite $OVERWRITE \
         --learner_type prompt \
         --learner_name APT_Learner \
-        --prompt_param "$PROMPT_P" \
+        --prompt_param 0.01 \
         --lr $LR \
         --seed $seed \
         --ema_coeff $EMA_COEFF \
