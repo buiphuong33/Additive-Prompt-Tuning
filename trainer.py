@@ -335,9 +335,11 @@ class Trainer:
             model_save_dir = self.model_top_dir + '/models/repeat-'+str(self.cur_iter+1)+'/task-'+self.task_names[i]+'/'
             self.learner.task_count = i 
             self.learner.add_valid_output_dim(len(self.tasks_logits[i]))
-            self.learner.pre_steps()
-            self.learner.cuda()
             self.learner.load_model(model_save_dir)
+            self.learner.cuda()
+            self.learner.pre_steps()
+            
+            
             
             # set task id for model (needed for prompting)
             try:
