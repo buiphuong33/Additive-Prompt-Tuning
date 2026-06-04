@@ -223,12 +223,15 @@ class Trainer:
 
             # increment task id in prompting modules
             if i > 0:
-                try:
-                    if self.learner.model.module.prompt is not None:
-                        self.learner.model.module.prompt.process_task_count()
-                except:
-                    if self.learner.model.prompt is not None:
-                        self.learner.model.prompt.process_task_count()
+                prompt_module = self.learner.model.module.prompt if hasattr(self.learner.model, 'module') else self.learner.model.prompt
+
+                if prompt_module is not None:
+                    # Kiểm tra nếu hàm cũ tồn tại thì mới gọi, nếu không thì bỏ qua vì luồng APT-D đã tự quản lý ở learners/prompt.py
+                    if hasattr(prompt_module, 'process_task_count'):
+                        prompt_module.process_task_count()
+                    else:
+                        # Bạn có thể in ra log để theo dõi luồng chạy nếu muốn
+                        pass
 
             # learn
             self.test_dataset.load_dataset(i, train=False)
@@ -321,13 +324,13 @@ class Trainer:
 
             # increment task id in prompting modules
             if i > 0:
-                try:
-                    if self.learner.model.module.prompt is not None:
-                        self.learner.model.module.prompt.process_task_count()
-                except:
-                    if self.learner.model.prompt is not None:
-                        self.learner.model.prompt.process_task_count()
+                prompt_module = self.learner.model.module.prompt if hasattr(self.learner.model, 'module') else self.learner.model.prompt
 
+                if prompt_module is not None:
+                    if hasattr(prompt_module, 'process_task_count'):
+                        prompt_module.process_task_count()
+                    else:
+                        pass
             # load model
             model_save_dir = self.model_top_dir + '/models/repeat-'+str(self.cur_iter+1)+'/task-'+self.task_names[i]+'/'
             self.learner.task_count = i 
