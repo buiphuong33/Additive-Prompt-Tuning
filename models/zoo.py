@@ -1,4 +1,4 @@
-# /models/zoo.py
+# models/zoo.py
 import itertools
 import torch
 import torch.nn as nn
@@ -36,15 +36,9 @@ class APT(nn.Module):
 
         trunc_normal_(self.prompt_tokens, std=0.02)
 
-        self.k_dynamic_projs = nn.ModuleList([nn.Linear(emb_d, emb_d) for _ in range(12)])
-        self.v_dynamic_projs = nn.ModuleList([nn.Linear(emb_d, emb_d) for _ in range(12)])
-        
-        # Khởi tạo trọng số các tầng tạo prompt động
-        for m in self.modules():
-            if isinstance(m, nn.Linear):
-                trunc_normal_(m.weight, std=0.02)
-                if m.bias is not None:
-                    nn.init.constant_(m.bias, 0)
+        for i in range(12):
+            setattr(self, f'k_layer_proj{i}', nn.Linear(2, 2))
+            setattr(self, f'v_layer_proj{i}', nn.Linear(2, 2))
          
    
     def merge_prompt(self, prompt1, prompt2):
@@ -59,35 +53,22 @@ class APT(nn.Module):
         self.task_count += 1
 
     def forward(self, l, x_block, train=False):
-        B, N, C = x_block.shape
-        cls_token = x_block[:, 0, :]
+        B, _, _ = x_block.shape
 
         prompt_groups = self.prompt_tokens
         
         if train or not self.merge_flag:
-            P_static_k = prompt_groups[l*2 : l*2+1]      # (1, emb_d)
-            P_static_v = prompt_groups[l*2+1 : l*2+2]
+            P_root_k = prompt_groups[l*2:l*2+1].reshape(12,1,64).expand(B,12,1,64)
+            P_root_v = prompt_groups[l*2+1:l*2+2].reshape(12,1,64).expand(B,12,1,64)
         elif not train and self.merge_flag:
-            P_static_k = self.global_merged_prompt[l*2 : l*2+1]
-            P_static_v = self.global_merged_prompt[l*2+1 : l*2+2]
+            P_root_k = self.global_merged_prompt[l*2:l*2+1].reshape(12,1,64).expand(B,12,1,64)
+            P_root_v = self.global_merged_prompt[l*2+1:l*2+2].reshape(12,1,64).expand(B,12,1,64)
         else:
             raise ValueError("merge flag and mode err")
 
-        P_static_k = P_static_k.expand(B, -1, -1)
-        P_static_v = P_static_v.expand(B, -1, -1)
-
-        P_dynamic_k = self.k_dynamic_projs[l](cls_token).unsqueeze(1) # (B, 1, emb_d)
-        P_dynamic_v = self.v_dynamic_projs[l](cls_token).unsqueeze(1)
-
-        P_final_k = P_static_k + self.prompt_dropout(P_dynamic_k)
-        P_final_v = P_static_v + self.prompt_dropout(P_dynamic_v)
-
-        P_root_k = P_final_k.reshape(B, 1, 12, 64).permute(0, 2, 1, 3)
-        P_root_v = P_final_v.reshape(B, 1, 12, 64).permute(0, 2, 1, 3)
-
-        P_k = torch.cat((P_root_k, torch.zeros((B, 12, 196, 64), device=x_block.device)), dim=-2)
-        P_v = torch.cat((P_root_v, torch.zeros((B, 12, 196, 64), device=x_block.device)), dim=-2)
-
+        P_k = torch.cat((P_root_k, torch.zeros((B,12,196,64),device =x_block.device)),dim=-2)
+        P_v = torch.cat((P_root_v, torch.zeros((B,12,196,64),device =x_block.device)),dim=-2)
+        
         P = [P_k, P_v]    
 
         return P #, rpt_index
@@ -147,20 +128,20 @@ class ViTZoo(nn.Module):
 
         if self.prompt_flag == "apt":
             tuned_params = [
-                "clf_norm.weight", "clf_norm.bias",
-                "prompt.prompt_tokens",
-                "prompt.k_dynamic_projs.weight", "prompt.k_dynamic_projs.bias",
-                "prompt.v_dynamic_projs.weight", "prompt.v_dynamic_projs.bias",
-                "last.weight", "last.bias",
+            "clf_norm.weight","clf_norm.bias",
+            "prompt.prompt_tokens",
+            "last.weight",
+            "last.bias", 
             ] 
         else:
             tuned_params = [
-                "clf_norm.weight", "clf_norm.bias",
-                "last.weight", "last.bias",
+            "clf_norm.weight","clf_norm.bias",
+            "last.weight",
+            "last.bias", 
             ]
 
         for name, param in self.named_parameters():
-            if any(p_name in name for p_name in tuned_params):
+            if name in tuned_params:
                 param.requires_grad = True
             else:
                 param.requires_grad = False
@@ -176,7 +157,7 @@ class ViTZoo(nn.Module):
     def forward(self, x, train=False):
         if self.prompt is not None:
             if self.prompt_flag == 'apt':
-                out = self.feat(x, prompt_module=self.prompt, train_flag=train)
+                out = self.feat(x, prompt=self.prompt, train=train)
                 out =  out[:,0,:]
             else: 
                 raise ValueError("prompt flag not supported")

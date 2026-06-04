@@ -1,4 +1,4 @@
-# /learners/prompt.py
+# learners/prompt.py
 from __future__ import print_function
 import torch
 import models
@@ -82,63 +82,5 @@ class APT_Learner(Prompt_Learner):
 
     def create_model(self):
         cfg = self.config
-        model = models.__dict__[cfg['model_type']].__dict__[cfg['model_name']](
-            out_dim=self.out_dim, 
-            ema_coeff=self.ema_coeff, 
-            prompt_flag='apt', 
-            prompt_param=self.prompt_param, 
-            tasks=self.tasks
-        )
+        model = models.__dict__[cfg['model_type']].__dict__[cfg['model_name']](out_dim=self.out_dim, ema_coeff=self.ema_coeff, prompt_flag = 'apt', prompt_param=self.prompt_param, tasks=self.tasks)
         return model
-
-    def init_optimizer(self):
-        if len(self.config['gpuid']) > 1:
-            prompt_module = self.model.module.prompt
-            last_module = self.model.module.last
-        else:
-            prompt_module = self.model.prompt
-            last_module = self.model.last
-
-        # Gom toàn bộ tham số của APT module (gồm prompt_tokens, dynamic_projs,...) và Classifier Head
-        params_to_opt = list(prompt_module.parameters()) + list(last_module.parameters())
-        
-        print('*****************************************')
-        print(f"Initializing optimizer for APT. Parameter groups: {len(params_to_opt)}")
-        print('*****************************************')
-        
-        optimizer_arg = {'params': params_to_opt,
-                         'lr': self.config['lr'],
-                         'weight_decay': self.config['weight_decay']}
-                         
-        if self.config['optimizer'] in ['SGD', 'RMSprop']:
-            optimizer_arg['momentum'] = self.config['momentum']
-        elif self.config['optimizer'] in ['Rprop']:
-            optimizer_arg.pop('weight_decay')
-        elif self.config['optimizer'] == 'amsgrad':
-            optimizer_arg['amsgrad'] = True
-            self.config['optimizer'] = 'Adam'
-        elif self.config['optimizer'] == 'Adam':
-            optimizer_arg['betas'] = (self.config['momentum'], 0.999)
-
-        self.optimizer = torch.optim.__dict__[self.config['optimizer']](**optimizer_arg)
-        
-        if self.schedule_type == 'cosine':
-            self.scheduler = CosineSchedule(self.optimizer, K=self.schedule[-1])
-        elif self.schedule_type == 'decay':
-            self.scheduler = torch.optim.lr_scheduler.MultiStepLR(self.optimizer, milestones=self.schedule, gamma=0.1)
-
-    def update_model(self, inputs, targets):
-        # Forward pass nhận logits từ mô hình APT cải tiến
-        logits = self.model(inputs, train=True)
-        
-        logits = logits[:, :self.valid_out_dim]
-        logits[:, :self.last_valid_out_dim] = -float('inf')
-        
-        # CHỈ tính Loss phân loại tiêu chuẩn (CrossEntropy)
-        loss_ce = self.criterion(logits, targets.long())       
-        
-        self.optimizer.zero_grad()
-        loss_ce.backward()
-        self.optimizer.step()
-        
-        return loss_ce.detach(), logits

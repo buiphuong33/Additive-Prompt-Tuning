@@ -1,4 +1,4 @@
-# /models/vit.py
+# models/vit.py
 '''
  * Based on vit from blip code base
  * https://github.com/salesforce/BLIP
@@ -68,23 +68,18 @@ class Attention(nn.Module):
     def get_attention_map(self):
         return self.attention_map
     
-    def forward(self, x, register_hook=False, prompt_module=None, layer_idx=None, train_flag=True):
+    def forward(self, x, register_hook=False, prompt=None,layer=-1):
         B, N, C = x.shape
-        dynamic_prompt_k, dynamic_prompt_v = None, None
-        if prompt_module is not None and layer_idx is not None:
-            x_cls = x[:, 0, :] 
-            dynamic_prompt_k, dynamic_prompt_v = prompt_module.get_dynamic_prompt(x_cls, layer_idx, train=train_flag)
-
         qkv = self.qkv(x).reshape(B, N, 3, self.num_heads, C // self.num_heads).permute(2, 0, 3, 1, 4)
-        q, k, v = qkv[0], qkv[1], qkv[2]
-        if dynamic_prompt_k is not None and dynamic_prompt_v is not None:
-            # Biến đổi kích thước (B, 1, C) về (B, num_heads, 1, head_dim) để khớp với ma trận K, V
-            dp_k = dynamic_prompt_k.reshape(B, 1, self.num_heads, C // self.num_heads).permute(0, 2, 1, 3)
-            dp_v = dynamic_prompt_v.reshape(B, 1, self.num_heads, C // self.num_heads).permute(0, 2, 1, 3)
-            
-            # Cộng dồn trực tiếp vào phần tử index 0 (CLS token) theo chiều Sequence Length
-            k[:, :, 0:1, :] = k[:, :, 0:1, :] + dp_k
-            v[:, :, 0:1, :] = v[:, :, 0:1, :] + dp_v
+        q, k, v = qkv[0], qkv[1], qkv[2]   # make torchscript happy (cannot use tensor as tuple)
+
+        if prompt is not None:
+            if type(prompt) is list and len(prompt) == 2:
+                pk, pv = prompt
+                k[:,:,0:1] = k[:,:,0:1] + pk[:,:,0:1]
+                v[:,:,0:1] = v[:,:,0:1] + pv[:,:,0:1]
+            else:
+                raise ValueError("prompt type not supported!")
 
         attn = (q @ k.transpose(-2, -1)) * self.scale
         attn = attn.softmax(dim=-1)
@@ -114,15 +109,16 @@ class Block(nn.Module):
         mlp_hidden_dim = int(dim * mlp_ratio)
         self.mlp = Mlp(in_features=dim, hidden_features=mlp_hidden_dim, act_layer=act_layer, drop=drop)
 
-    def forward(self, x, register_hook=False, prompt_module=None, layer_idx=None, train_flag=True):
-        _x, attn = self.attn(
-            self.norm1(x), 
-            register_hook=register_hook, 
-            prompt_module=prompt_module, 
-            layer_idx=layer_idx, 
-            train_flag=train_flag
-        )
-        x = x + self.drop_path(_x)
+    def forward(self, x, register_hook=False, prompt=None,layer=-1):
+        if prompt is not None:
+            if type(prompt) is list: # attention;[k,v]
+                _x, attn = self.attn(self.norm1(x), register_hook=register_hook, prompt=prompt,layer=layer)
+                x = x + self.drop_path(_x)
+            else:
+                raise ValueError("prompt type not suported!")
+        else:
+            _x, attn = self.attn(self.norm1(x), register_hook=register_hook, prompt=None,layer=layer)
+            x = x + self.drop_path(_x)
        
         x = x + self.drop_path(self.mlp(self.norm2(x)))
         return x, attn
@@ -194,7 +190,7 @@ class VisionTransformer(nn.Module):
     def no_weight_decay(self):
         return {'pos_embed', 'cls_token'}
 
-    def forward(self, x, register_blk=-1, prompt_module=None, train_flag=True):
+    def forward(self, x, register_blk=-1, prompt=None, q=None, train=False, task_id=None):
         B = x.shape[0]
         x = self.patch_embed(x)
         
@@ -203,17 +199,28 @@ class VisionTransformer(nn.Module):
         x = x + self.pos_embed[:,:x.size(1),:]
         x = self.pos_drop(x)
 
-        for i, blk in enumerate(self.blocks):
-            # Truyền trực tiếp prompt_module, layer index hiện tại (i) và trạng thái train/eval
-            x, attn = blk(
-                x, 
-                register_hook=(register_blk == i), 
-                prompt_module=prompt_module, 
-                layer_idx=i, 
-                train_flag=train_flag
-            )
+        prepend_layers =[]# [0,1,2,3,4,5,6,7,8,9,10,11]
+        add_layers = [0,1,2,3,4,5,6,7,8,9,10,11]
+
+        if prompt is None:
+            for i, blk in enumerate(self.blocks):
+                x, attn = blk(x, register_blk==i)
+        else:
+            for i, blk in enumerate(self.blocks):
+                if i in prepend_layers:
+                    prompt_list = prompt.forward(i, x, train=train)
+                    x = torch.cat((
+                        x[:, :1, :], # cls
+                        prompt_list,
+                        x[:, 1:, :]
+                    ), dim=1)
+                elif i in add_layers:                            
+                    prompt_list = prompt.forward(i, x, train=train)
+                    
+                x, attn = blk(x, register_blk==i, prompt=prompt_list, layer=i)    
 
         x = self.norm(x)
+
         return x
 
     @torch.jit.ignore()
