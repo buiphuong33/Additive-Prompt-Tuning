@@ -99,6 +99,9 @@ class Prompt_Learner(NormalNN):
             # Giả sử mỗi task mới bạn muốn sinh thêm 10 components mới
             num_new_components = self.config.get('num_components_per_task', 10)
             prompt_module.freeze_old_components(M_new=num_new_components)
+
+            device = next(self.model.parameters()).device
+            self.model.to(device)
             
             # CỰC KỲ QUAN TRỌNG: Gọi lại init_optimizer để làm mới danh sách tham số huấn luyện của Optimizer
             self.init_optimizer()
