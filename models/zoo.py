@@ -30,6 +30,7 @@ class APT(nn.Module):
         # Mỗi component gồm: prompt_k và prompt_v cho toàn bộ 12 layers
         self.components_k = nn.ModuleList()
         self.components_v = nn.ModuleList()
+        self.merge_flag = False
 
         # khởi tạo M components đầu tiên
         self.add_new_components(initial_components)

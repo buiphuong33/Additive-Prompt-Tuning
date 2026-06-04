@@ -50,6 +50,8 @@ class Prompt_Learner(NormalNN):
     # SỬA ĐỔI TẠI: learners/prompt.py -> class APT_Learner -> bổ sung/sửa hàm init_optimizer
 
     def init_optimizer(self):
+        if hasattr(self, 'optimizer'):
+            del self.optimizer
         # Phân tách cấu hình tham số Optimizer từ file cấu hình config
         optimizer_arg = {'lr': self.config['lr'], 'weight_decay': self.config['weight_decay']}
         if self.config['optimizer'] == 'SGD':
@@ -107,11 +109,11 @@ class Prompt_Learner(NormalNN):
         """Hàm tự động chạy sau khi kết thúc huấn luyện một Task"""
         prompt_module = self.model.module.prompt if hasattr(self.model, 'module') else self.model.prompt
         
-        # Thực hiện thuật toán Post-Project Fusion (PPF) để hòa trộn cấu trúc components
+        # Thực hiện thuật toán Progressive Prompt Fusion để hòa trộn cấu trúc components
         beta_fusion = self.config.get('beta_ppf', 0.9)
         if hasattr(prompt_module, 'progressive_prompt_fusion'):
-            prompt_module.post_project_fusion(beta=beta_fusion)
-            print(f"==> Đã thực hiện đồng bộ Post-Project Fusion (PPF) với hệ số beta={beta_fusion}")
+            prompt_module.progressive_prompt_fusion(beta=beta_fusion)
+            print(f"==> Đã thực hiện đồng bộ Progressive Prompt Fusion với hệ số beta={beta_fusion}")
 
 class APT_Learner(Prompt_Learner):
 
