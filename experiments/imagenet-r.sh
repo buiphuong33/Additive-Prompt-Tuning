@@ -46,7 +46,7 @@ do
         --overwrite $OVERWRITE \
         --learner_type prompt \
         --learner_name APT_Learner \
-        --prompt_param $PROMPT_P \
+        --prompt_param 0.01 \
         --lr $LR \
         --seed $seed \
         --ema_coeff $EMA_COEFF \
