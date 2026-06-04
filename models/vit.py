@@ -76,8 +76,12 @@ class Attention(nn.Module):
         if prompt is not None:
             if type(prompt) is list and len(prompt) == 2:
                 pk, pv = prompt
-                k[:,:,0:1] = k[:,:,0:1] + pk[:,:,0:1]
-                v[:,:,0:1] = v[:,:,0:1] + pv[:,:,0:1]
+                pk = pk.reshape(B, 1, self.num_heads, C // self.num_heads).permute(0, 2, 1, 3)
+                pv = pv.reshape(B, 1, self.num_heads, C // self.num_heads).permute(0, 2, 1, 3)
+                
+                # Áp dụng công thức APT-D: Additive trực tiếp vào CLS token (vị trí index 0)
+                k[:, :, 0:1, :] = k[:, :, 0:1, :] + pk
+                v[:, :, 0:1, :] = v[:, :, 0:1, :] + pv
             else:
                 raise ValueError("prompt type not supported!")
 
@@ -205,23 +209,24 @@ class VisionTransformer(nn.Module):
         if prompt is None:
             for i, blk in enumerate(self.blocks):
                 x, attn = blk(x, register_blk==i)
+            return x
         else:
+            cls_token_query = x[:,0,:]
+            P_k_total, P_v_total, alpha = prompt(cls_token_query)
+
             for i, blk in enumerate(self.blocks):
-                if i in prepend_layers:
-                    prompt_list = prompt.forward(i, x, train=train)
-                    x = torch.cat((
-                        x[:, :1, :], # cls
-                        prompt_list,
-                        x[:, 1:, :]
-                    ), dim=1)
-                elif i in add_layers:                            
-                    prompt_list = prompt.forward(i, x, train=train)
-                    
+                # Trích xuất prompt riêng cho layer thứ i
+                # Kích thước ban đầu: [B, 12, 1, emb_d] -> Lấy layer i: [B, 1, emb_d]
+                p_k_layer = P_k_total[:, i, :, :]
+                p_v_layer = P_v_total[:, i, :, :]
+                prompt_list = [p_k_layer, p_v_layer]
+                
+                # Truyền prompt_list xuống block
                 x, attn = blk(x, register_blk==i, prompt=prompt_list, layer=i)    
 
-        x = self.norm(x)
-
-        return x
+            self.current_alpha = alpha # Lưu tạm alpha vào mô hình để tầng ngoài (trainer) gọi ra tính Loss Ortho
+            x = self.norm(x)
+            return x
 
     @torch.jit.ignore()
     def load_pretrained(self, checkpoint_path, prefix=''):

@@ -333,6 +333,7 @@ class Trainer:
             self.learner.task_count = i 
             self.learner.add_valid_output_dim(len(self.tasks_logits[i]))
             self.learner.pre_steps()
+            self.learner.cuda()
             self.learner.load_model(model_save_dir)
             
             # set task id for model (needed for prompting)
