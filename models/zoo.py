@@ -1,4 +1,3 @@
-# models/zoo.py
 import itertools
 import torch
 import torch.nn as nn
@@ -18,112 +17,93 @@ from functools import reduce
 
 
 class APT(nn.Module):
-    def __init__(self, emb_d, initial_components=10, key_dim=768, num_layers=12):
+    def __init__(self, emb_d, n_tasks, prompt_param, ema_coeff):
 
         super().__init__()
         self.task_count = 0
-        self.num_layers = num_layers
-        self.key_dim = key_dim
         self.emb_d = emb_d
-        
-        # Lưu danh sách các Parameter chứa Prompts của các component
-        # Mỗi component gồm: prompt_k và prompt_v cho toàn bộ 12 layers
-        self.components_k = nn.ModuleList()
-        self.components_v = nn.ModuleList()
-        self.merge_flag = False
+        self.n_tasks = n_tasks
+        self._init_smart(prompt_param)
 
-        # khởi tạo M components đầu tiên
-        self.add_new_components(initial_components)
+        self.merge_flag = True
 
-        # Khởi tạo Pool chứa Keys tương ứng với các component [M, key_dim]
-        self.keys = nn.Parameter(torch.randn(initial_components, key_dim))
-        trunc_normal_(self.keys, std=0.02)
+        self.ema_coeff = ema_coeff
 
-        # Vector chú ý A dùng để ⊙ với query
-        self.A = nn.Parameter(torch.ones(1, key_dim))
+        self.alpha_min = 0.05
+        self.alpha_max = 0.95
+        self.proto_temp = 0.5
+        self.proto_tau = 0.0
 
-        # Đánh dấu số lượng component cũ để phục vụ việc freeze
-        self.num_old_components = 0
+        self.prompt_tokens = create_prompt_with_init(12*2, emb_d) 
+        global_merged_prompt = torch.zeros(12*2, emb_d)
+        self.register_buffer('global_merged_prompt', global_merged_prompt.clone().detach()) 
+        self.register_buffer('global_task_proto', torch.zeros(emb_d))
+        self.register_buffer('proto_count', torch.zeros(1))
+        self.current_task_proto = None
 
-    def add_new_components(self, M):
-        """Hàm sinh thêm M components mới vào pool khi có task mới"""
-        for _ in range(M):
-            # Tạo prompt cho Key và Value: kích thước [num_layers, 1, emb_d]
-            p_k = nn.Parameter(torch.FloatTensor(self.num_layers, 1, self.emb_d))
-            p_v = nn.Parameter(torch.FloatTensor(self.num_layers, 1, self.emb_d))
-            trunc_normal_(p_k, std=0.02)
-            trunc_normal_(p_v, std=0.02)
-            self.components_k.append(nn.ParameterDict({'param': p_k}))
-            self.components_v.append(nn.ParameterDict({'param': p_v}))
+        trunc_normal_(self.prompt_tokens, std=0.02)
+
+        for i in range(12):
+            setattr(self, f'k_layer_proj{i}', nn.Linear(2, 2))
+            setattr(self, f'v_layer_proj{i}', nn.Linear(2, 2))
+         
    
-    def freeze_old_components(self, M_new=10):
-        """Hàm gọi đầu mỗi Task mới (ngoại trừ task 0) để đóng băng components cũ"""
+    def merge_prompt(self, prompt1, prompt2):
+        print("Merging prompt ... ")
+        alpha = self.compute_alpha()
+        return prompt1 * alpha + prompt2 * (1 - alpha)
+
+    def compute_alpha(self):
+        if self.current_task_proto is None or self.proto_count.item() == 0:
+            return torch.tensor(self.ema_coeff, device=self.prompt_tokens.device)
+
+        cur_proto = F.normalize(self.current_task_proto.view(-1), dim=0)
+        prev_proto = F.normalize(self.global_task_proto.view(-1), dim=0)
+        similarity = torch.clamp(torch.dot(cur_proto, prev_proto), -1.0, 1.0)
+        alpha = torch.sigmoid((similarity - self.proto_tau) / self.proto_temp)
+        alpha = torch.clamp(alpha, self.alpha_min, self.alpha_max)
+        return alpha
+
+    def set_current_task_prototype(self, task_proto):
+        self.current_task_proto = task_proto.detach()
+
+    def update_global_task_prototype(self, task_proto):
+        task_proto = task_proto.detach().to(self.global_task_proto.device)
+        count = self.proto_count.item()
+        if count == 0:
+            new_proto = task_proto
+        else:
+            new_proto = (self.global_task_proto * count + task_proto) / (count + 1.0)
+        self.global_task_proto.data.copy_(new_proto)
+        self.proto_count.data.add_(1.0)
+
+    def _init_smart(self, prompt_param):
+        self.prompt_dropout_ratio = float(prompt_param[0])
+        self.prompt_dropout = nn.Dropout(self.prompt_dropout_ratio)
+
+    def process_task_count(self):
         self.task_count += 1
-        # 1. Đóng băng tất cả các component hiện tại
-        for param in self.components_k.parameters():
-            param.requires_grad = False
-        for param in self.components_v.parameters():
-            param.requires_grad = False
-            
-        self.num_old_components = len(self.components_k)
-        
-        # 2. Tạo M_new components mới cho task này
-        self.add_new_components(M_new)
-        
-        # 3. Mở rộng ma trận Keys (giữ lại gradient của keys mới, đóng băng keys cũ)
-        old_keys = self.keys.data
-        new_keys = torch.randn(M_new, self.key_dim).to(old_keys.device)
-        trunc_normal_(new_keys, std=0.02)
-        self.keys = nn.Parameter(torch.cat([old_keys, new_keys], dim=0))
 
-    def progressive_prompt_fusion(self, beta=0.9):
-        """Hàm PPF thực hiện sau khi kết thúc một task"""
-        with torch.no_grad():
-            num_total = len(self.components_k)
-            num_new = num_total - self.num_old_components
-            if self.num_old_components > 0 and num_new > 0:
-                # Ép tri thức từ component mới học vào component cũ (Ví dụ phối hợp tuần hoàn cyclic)
-                for i in range(self.num_old_components):
-                    idx_new = self.num_old_components + (i % num_new)
-                    c_old_k = self.components_k[i]['param']
-                    c_new_k = self.components_k[idx_new]['param']
-                    c_old_k.copy_(beta * c_old_k + (1 - beta) * c_new_k)
-                    
-                    c_old_v = self.components_v[i]['param']
-                    c_new_v = self.components_v[idx_new]['param']
-                    c_old_v.copy_(beta * c_old_v + (1 - beta) * c_new_v)
+    def forward(self, l, x_block, train=False):
+        B, _, _ = x_block.shape
 
-    def forward(self, cls_token):
-        """
-        Nhận CLS token đầu vào làm Query, tính toán trọng số alpha và tổ hợp Prompt.
-        cls_token: [B, emb_d]
-        """
-        B = cls_token.shape[0]
+        prompt_groups = self.prompt_tokens
         
-        # 1. Tính toán Query: query = CLS ⊙ A
-        query = cls_token * self.A  # [B, key_dim]
+        if train or not self.merge_flag:
+            P_root_k = prompt_groups[l*2:l*2+1].reshape(12,1,64).expand(B,12,1,64)
+            P_root_v = prompt_groups[l*2+1:l*2+2].reshape(12,1,64).expand(B,12,1,64)
+        elif not train and self.merge_flag:
+            P_root_k = self.global_merged_prompt[l*2:l*2+1].reshape(12,1,64).expand(B,12,1,64)
+            P_root_v = self.global_merged_prompt[l*2+1:l*2+2].reshape(12,1,64).expand(B,12,1,64)
+        else:
+            raise ValueError("merge flag and mode err")
+
+        P_k = torch.cat((P_root_k, torch.zeros((B,12,196,64),device =x_block.device)),dim=-2)
+        P_v = torch.cat((P_root_v, torch.zeros((B,12,196,64),device =x_block.device)),dim=-2)
         
-        # 2. Tính Cosine Similarity giữa query và TẤT CẢ các keys trong pool
-        query_norm = F.normalize(query, p=2, dim=-1)
-        keys_norm = F.normalize(self.keys, p=2, dim=-1)
-        sim = torch.matmul(query_norm, keys_norm.t())  # [B, Total_components]
-        
-        # 3. Tính trọng số alpha = softmax(sim)
-        alpha = F.softmax(sim, dim=-1)  # [B, Total_components]
-        
-        # 4. Tổ hợp Prompts từ weighted sum của các components
-        # Gom tất cả các component parameter thành một Tensor lớn
-        all_p_k = torch.stack([c['param'] for c in self.components_k], dim=0) # [Total_components, 12, 1, emb_d]
-        all_p_v = torch.stack([c['param'] for c in self.components_v], dim=0) # [Total_components, 12, 1, emb_d]
-        
-        # Chuẩn bị alpha cho việc broadcasting: [B, Total_components, 1, 1, 1]
-        alpha_expanded = alpha.unsqueeze(-1).unsqueeze(-1).unsqueeze(-1)
-        
-        # Thực hiện phép tính Σ(α_m * P^m)
-        P_k_total = torch.sum(alpha_expanded * all_p_k.unsqueeze(0), dim=1) # [B, 12, 1, emb_d]
-        P_v_total = torch.sum(alpha_expanded * all_p_v.unsqueeze(0), dim=1) # [B, 12, 1, emb_d]
-        
-        return P_k_total, P_v_total, alpha
+        P = [P_k, P_v]    
+
+        return P #, rpt_index
 
 # note - ortho init has not been found to help l2p/dual prompt
 def create_prompt_with_init(a, b, c=None, ortho=False, mean=None, std=None, init_ref=None):
@@ -174,7 +154,7 @@ class ViTZoo(nn.Module):
 
         # create prompting module
         if self.prompt_flag == 'apt':
-            self.prompt = APT(768, initial_components=10)
+            self.prompt = APT(768, prompt_param[0], prompt_param[1], ema_coeff=ema_coeff)
         else:
             self.prompt = None
 

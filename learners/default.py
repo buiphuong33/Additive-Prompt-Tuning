@@ -1,4 +1,3 @@
-# learners/default.py
 from __future__ import print_function
 import math
 import torch
@@ -16,6 +15,7 @@ from utils.schedulers import CosineSchedule
 from timm.models.layers import trunc_normal_, DropPath
 import random
 import matplotlib.pyplot as plt
+from torch.utils.data import DataLoader
 
 
 class NormalNN(nn.Module):
@@ -131,20 +131,27 @@ class NormalNN(nn.Module):
                 losses = AverageMeter()
                 acc = AverageMeter()
 
+        task_proto = self.extract_task_prototype(train_dataset)
+        prompt_module = self.model.module.prompt if hasattr(self.model, 'module') else self.model.prompt
+        if prompt_module is not None and task_proto is not None:
+            prompt_module.set_current_task_prototype(task_proto)
+
                                          
         self.model.train()
 
-        merge_flag = self.model.prompt.merge_flag
+        merge_flag = prompt_module.merge_flag if prompt_module is not None else False
 
         if merge_flag:
-            if self.last_valid_out_dim == 0:
-                self.model.prompt.global_merged_prompt = self.model.prompt.prompt_tokens.clone().detach()
+            if self.last_valid_out_dim == 0 or prompt_module.proto_count.item() == 0:
+                prompt_module.global_merged_prompt.data.copy_(prompt_module.prompt_tokens.clone().detach())
             else:
-                now_task_p = self.model.prompt.prompt_tokens.clone().detach()
-                global_p = self.model.prompt.global_merged_prompt
-                merged_p = self.model.prompt.merge_prompt(global_p, now_task_p)
-                
-                self.model.prompt.global_merged_prompt.data = merged_p
+                now_task_p = prompt_module.prompt_tokens.clone().detach()
+                global_p = prompt_module.global_merged_prompt
+                merged_p = prompt_module.merge_prompt(global_p, now_task_p)
+                prompt_module.global_merged_prompt.data.copy_(merged_p)
+
+            if task_proto is not None:
+                prompt_module.update_global_task_prototype(task_proto)
             
         self.model.eval()
 
@@ -160,6 +167,54 @@ class NormalNN(nn.Module):
             return batch_time.avg
         except:
             return None
+
+    def extract_task_prototype(self, train_dataset):
+        if not hasattr(train_dataset, 'archive'):
+            return None
+
+        task_index = getattr(self, 'task_count', 0)
+        if task_index >= len(train_dataset.archive):
+            return None
+
+        orig_data = train_dataset.data
+        orig_targets = train_dataset.targets
+        orig_t = getattr(train_dataset, 't', -1)
+
+        try:
+            train_dataset.data, train_dataset.targets = train_dataset.archive[task_index]
+            train_dataset.t = task_index
+            proto_loader = DataLoader(train_dataset, batch_size=self.batch_size, shuffle=False, drop_last=False, num_workers=0)
+
+            backbone = self.model.module if hasattr(self.model, 'module') else self.model
+            was_training = backbone.training
+            backbone.eval()
+
+            proto_sum = None
+            sample_count = 0
+
+            with torch.no_grad():
+                for x, _, _ in proto_loader:
+                    if self.gpu:
+                        x = x.cuda()
+                    feats = backbone.feat(x, prompt=backbone.prompt, train=True)
+                    cls_feat = F.normalize(feats[:, 0, :], dim=-1)
+                    if proto_sum is None:
+                        proto_sum = torch.zeros(cls_feat.size(-1), device=cls_feat.device)
+                    proto_sum += cls_feat.sum(dim=0)
+                    sample_count += cls_feat.size(0)
+
+            if proto_sum is None or sample_count == 0:
+                proto = None
+            else:
+                proto = proto_sum / float(sample_count)
+
+            backbone.train(was_training)
+            return proto
+
+        finally:
+            train_dataset.data = orig_data
+            train_dataset.targets = orig_targets
+            train_dataset.t = orig_t
         
     def criterion(self, logits, targets): # data_weights [32]
         loss_supervised = (self.criterion_fn(logits, targets.long())).mean()
@@ -274,7 +329,17 @@ class NormalNN(nn.Module):
     def init_optimizer(self):
 
         # parse optimizer args
-        optimizer_arg = {'params':self.model.parameters(),
+        base_model = self.model.module if hasattr(self.model, 'module') else self.model
+        if hasattr(base_model, 'prompt') and base_model.prompt is not None:
+            optimizer_params = list(base_model.prompt.parameters())
+        else:
+            optimizer_params = list(base_model.parameters())
+        if hasattr(base_model, 'last'):
+            optimizer_params += list(base_model.last.parameters())
+        if hasattr(base_model, 'clf_norm'):
+            optimizer_params += list(base_model.clf_norm.parameters())
+
+        optimizer_arg = {'params':optimizer_params,
                          'lr':self.config['lr'],
                          'weight_decay':self.config['weight_decay']}
         if self.config['optimizer'] in ['SGD','RMSprop']:
