@@ -1,4 +1,3 @@
-#experiments/cifar-100.sh
 #!/bin/bash
 
 # experiment settings
@@ -15,7 +14,7 @@ OVERWRITE=0
 LR=0.004
 SCHEDULE=30
 EMA_COEFF=0.7
-SEED_LIST=(2)
+SEED_LIST=(2 3)
 
 DELAY_BETWEEN_EXPERIMENTS=10
 

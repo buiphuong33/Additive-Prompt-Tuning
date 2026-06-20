@@ -1,4 +1,3 @@
-#dataloader.py
 from __future__ import print_function
 from PIL import Image
 import os
@@ -324,26 +323,8 @@ class iIMAGENET_R(iDataset):
             tuple: (image, target) where target is index of the target class
         """
         img_path, target = self.data[index], self.targets[index]
-
-        img_path = str(img_path)
-
-        # 2. Kiểm tra nếu file không tồn tại ở đường dẫn mặc định (data/...)
-        if not os.path.exists(img_path):
-            
-            alt_path = img_path.replace('data/imagenet-r/', '/kaggle/input/datasets/mauricioalvarezj/imagenet-r/imagenet-r/')
-            
-            # Cách 2: Nếu folder trên Kaggle không lồng nhau, thử:
-            if not os.path.exists(alt_path):
-                alt_path = img_path.replace('data/imagenet-r/', '/kaggle/input/datasets/mauricioalvarezj/imagenet-r/imagenet-r')
-            
-            # Cập nhật lại img_path nếu tìm thấy file ở đường dẫn thay thế
-            if os.path.exists(alt_path):
-                img_path = alt_path
-            else:
-                # Nếu vẫn không thấy, in ra để debug xem nó đang tìm ở đâu
-                print(f"DEBUG: Không tìm thấy ảnh tại: {img_path} HOẶC {alt_path}")
         img = jpg_image_to_array(img_path)
-        
+
         # doing this so that it is consistent with all other datasets
         # to return a PIL Image
         img = Image.fromarray(img)

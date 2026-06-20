@@ -1,4 +1,3 @@
-#trainer.py
 import os
 import sys
 import argparse
@@ -223,15 +222,12 @@ class Trainer:
 
             # increment task id in prompting modules
             if i > 0:
-                prompt_module = self.learner.model.module.prompt if hasattr(self.learner.model, 'module') else self.learner.model.prompt
-
-                if prompt_module is not None:
-                    # Kiểm tra nếu hàm cũ tồn tại thì mới gọi, nếu không thì bỏ qua vì luồng APT-D đã tự quản lý ở learners/prompt.py
-                    if hasattr(prompt_module, 'process_task_count'):
-                        prompt_module.process_task_count()
-                    else:
-                        # Bạn có thể in ra log để theo dõi luồng chạy nếu muốn
-                        pass
+                try:
+                    if self.learner.model.module.prompt is not None:
+                        self.learner.model.module.prompt.process_task_count()
+                except:
+                    if self.learner.model.prompt is not None:
+                        self.learner.model.prompt.process_task_count()
 
             # learn
             self.test_dataset.load_dataset(i, train=False)
@@ -324,22 +320,19 @@ class Trainer:
 
             # increment task id in prompting modules
             if i > 0:
-                prompt_module = self.learner.model.module.prompt if hasattr(self.learner.model, 'module') else self.learner.model.prompt
+                try:
+                    if self.learner.model.module.prompt is not None:
+                        self.learner.model.module.prompt.process_task_count()
+                except:
+                    if self.learner.model.prompt is not None:
+                        self.learner.model.prompt.process_task_count()
 
-                if prompt_module is not None:
-                    if hasattr(prompt_module, 'process_task_count'):
-                        prompt_module.process_task_count()
-                    else:
-                        pass
             # load model
             model_save_dir = self.model_top_dir + '/models/repeat-'+str(self.cur_iter+1)+'/task-'+self.task_names[i]+'/'
             self.learner.task_count = i 
             self.learner.add_valid_output_dim(len(self.tasks_logits[i]))
-            self.learner.load_model(model_save_dir)
-            self.learner.cuda()
             self.learner.pre_steps()
-            
-            
+            self.learner.load_model(model_save_dir)
             
             # set task id for model (needed for prompting)
             try:
